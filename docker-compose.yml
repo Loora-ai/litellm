@@ -22,6 +22,10 @@ services:
       # is auto-refreshed alongside the writer.
       # DATABASE_URL_READ_REPLICA: "postgresql://llmproxy:dbpassword9090@db-reader:5432/litellm"
       STORE_MODEL_IN_DB: "True" # allows adding models to proxy via UI
+      LITELLM_MASTER_KEY: "sk-1234" # Required for UI authentication - change this to a secure key
+      UI_USERNAME: "admin"
+      UI_PASSWORD: "admin123"
+      LITELLM_NON_ROOT: "true" # enables UI restructuring at runtime
     env_file: []
       # - .env # Load local .env file?
     depends_on:
