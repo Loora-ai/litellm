@@ -1,69 +1,109 @@
-import { act, fireEvent, render, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { renderWithProviders } from "../../tests/test-utils";
 import Sidebar from "./leftnav";
-
-// Stub ResizeObserver used by antd in jsdom
-class ResizeObserver {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-}
-(global as any).ResizeObserver = ResizeObserver;
 
 vi.mock("../utils/roles", () => {
   return {
-    all_admin_roles: ["admin"],
+    all_admin_roles: ["admin", "admin_viewer"],
     internalUserRoles: ["internal"],
     rolesWithWriteAccess: ["admin", "internal"],
-    isAdminRole: (role: string) => role === "admin",
+    rolesAllowedToViewWriteScopedPages: ["admin", "internal", "admin_viewer"],
+    isAdminRole: (role: string) => role === "admin" || role === "admin_viewer",
+    isUserTeamAdminForAnyTeam: () => false,
+  };
+});
+
+const { mockUseAuthorized, mockUseOrganizations } = vi.hoisted(() => {
+  const mockUseAuthorized = vi.fn(() => ({
+    userId: "test-user-id",
+    accessToken: "test-access-token",
+    userRole: "admin",
+    token: "test-token",
+    userEmail: "test@example.com",
+    premiumUser: false,
+    disabledPersonalKeyCreation: false,
+    showSSOBanner: false,
+  }));
+
+  const mockUseOrganizations = vi.fn(() => ({
+    data: [],
+    isLoading: false,
+    error: null,
+  }));
+
+  return { mockUseAuthorized, mockUseOrganizations };
+});
+
+vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
+  default: mockUseAuthorized,
+}));
+
+vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
+  useOrganizations: mockUseOrganizations,
+}));
+
+vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
+  useTeams: () => ({ data: [], isLoading: false, error: null }),
+}));
+
+vi.mock("@/app/(dashboard)/hooks/uiConfig/useUIConfig", () => {
+  return {
+    useUIConfig: () => ({
+      data: { admin_ui_disabled: false },
+      isLoading: false,
+    }),
   };
 });
 
 describe("Sidebar (leftnav)", () => {
   const defaultProps = {
-    accessToken: null as string | null,
     setPage: vi.fn(),
-    userRole: "admin",
     defaultSelectedKey: "api-keys",
     collapsed: false,
   };
 
   it("renders all top-level (non-nested) tabs for admin", () => {
-    const { getByText } = render(<Sidebar {...defaultProps} />);
+    renderWithProviders(<Sidebar {...defaultProps} />);
 
     const topLevelLabels = [
       "Virtual Keys",
       "Playground",
       "Models + Endpoints",
+      "Agentic",
+      "MCP Servers",
+      "Guardrails",
+      "Policies",
+      "Tools",
       "Usage",
+      "Logs",
+      "Guardrails Monitor",
       "Teams",
-      "Organizations",
       "Internal Users",
+      "Organizations",
+      "Access Groups",
       "Budgets",
       "API Reference",
       "AI Hub",
-      "Logs",
-      "Guardrails",
-      "MCP Servers",
-      "Tools",
+      "Learning Resources",
       "Experimental",
       "Settings",
     ];
 
     topLevelLabels.forEach((label) => {
-      expect(getByText(label)).toBeInTheDocument();
+      expect(screen.getByText(label)).toBeInTheDocument();
     });
   });
 
   it("expands a nested tab to reveal its children (Tools > Search Tools)", async () => {
-    const { getByText, queryByText } = render(<Sidebar {...defaultProps} />);
+    renderWithProviders(<Sidebar {...defaultProps} />);
 
-    expect(queryByText("Search Tools")).not.toBeInTheDocument();
+    expect(screen.queryByText("Search Tools")).not.toBeInTheDocument();
     act(() => {
-      fireEvent.click(getByText("Tools"));
+      fireEvent.click(screen.getByText("Tools"));
     });
     await waitFor(() => {
-      expect(getByText("Search Tools")).toBeInTheDocument();
+      expect(screen.getByText("Search Tools")).toBeInTheDocument();
     });
   });
   it("has no duplicate keys among all menu items and their children", () => {
@@ -82,7 +122,7 @@ describe("Sidebar (leftnav)", () => {
       return allKeys;
     }
 
-    const { container } = render(<Sidebar {...defaultProps} />);
+    const { container } = renderWithProviders(<Sidebar {...defaultProps} />);
     const allRenderedKeys = getAllKeysFromMenu(container);
 
     const keySet = new Set<string>();
@@ -94,5 +134,91 @@ describe("Sidebar (leftnav)", () => {
       keySet.add(key);
     }
     expect(duplicates).toHaveLength(0);
+  });
+
+  describe("Admin Viewer parity", () => {
+    // Admin Viewer follows a "read parity with Proxy Admin, no writes, no
+    // cost-incurring actions" rule. Playground stays hidden (incurs LLM
+    // cost); Models + Endpoints and Agents must be visible read-only.
+    const adminViewerAuth = {
+      userId: "admin-viewer-user-id",
+      accessToken: "test-access-token",
+      userRole: "admin_viewer",
+      token: "test-token",
+      userEmail: "viewer@example.com",
+      premiumUser: false,
+      disabledPersonalKeyCreation: false,
+      showSSOBanner: false,
+    };
+
+    it("hides Playground from Admin Viewer (cost-incurring action)", () => {
+      mockUseAuthorized.mockReturnValueOnce(adminViewerAuth);
+      renderWithProviders(<Sidebar {...defaultProps} />);
+      expect(screen.queryByText("Playground")).not.toBeInTheDocument();
+    });
+
+    it("shows Models + Endpoints to Admin Viewer (read-only)", () => {
+      mockUseAuthorized.mockReturnValueOnce(adminViewerAuth);
+      renderWithProviders(<Sidebar {...defaultProps} />);
+      expect(screen.getByText("Models + Endpoints")).toBeInTheDocument();
+    });
+
+    it("shows Agents (under Agentic) to Admin Viewer (read-only)", async () => {
+      mockUseAuthorized.mockReturnValueOnce(adminViewerAuth);
+      renderWithProviders(<Sidebar {...defaultProps} />);
+      // Agents is now nested under the "Agentic" submenu — expand parent
+      // first to render the children, then assert Agents is visible.
+      act(() => {
+        fireEvent.click(screen.getByText("Agentic"));
+      });
+      await waitFor(() => {
+        expect(screen.getByText("Agents")).toBeInTheDocument();
+      });
+    });
+
+    it("shows Logs to Admin Viewer", () => {
+      mockUseAuthorized.mockReturnValueOnce(adminViewerAuth);
+      renderWithProviders(<Sidebar {...defaultProps} />);
+      expect(screen.getByText("Logs")).toBeInTheDocument();
+    });
+  });
+
+  it("should show Organizations tab for organization admins", () => {
+    mockUseAuthorized.mockReturnValueOnce({
+      userId: "org-admin-user-id",
+      accessToken: "test-access-token",
+      userRole: "viewer",
+      token: "test-token",
+      userEmail: "orgadmin@example.com",
+      premiumUser: false,
+      disabledPersonalKeyCreation: false,
+      showSSOBanner: false,
+    });
+
+    mockUseOrganizations.mockReturnValueOnce({
+      data: [
+        {
+          organization_id: "org-1",
+          organization_name: "Test Organization",
+          spend: 0,
+          max_budget: null,
+          models: [],
+          tpm_limit: null,
+          rpm_limit: null,
+          members: [
+            {
+              user_id: "org-admin-user-id",
+              user_role: "org_admin",
+            },
+          ],
+        },
+      ],
+      isLoading: false,
+      error: null,
+    } as any);
+
+    renderWithProviders(<Sidebar {...defaultProps} />);
+
+    expect(screen.getByText("Organizations")).toBeInTheDocument();
   });
 });

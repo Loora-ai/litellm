@@ -24,6 +24,8 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.litellm_core_utils.url_utils import async_safe_get
+from litellm.rag.ingestion.file_parsers import extract_text_from_pdf
 from litellm.rag.text_splitters import RecursiveCharacterTextSplitter
 from litellm.types.rag import RAGIngestOptions, RAGIngestResponse
 
@@ -69,17 +71,29 @@ class BaseRAGIngestion(ABC):
         Load credentials from litellm_credential_name if provided in vector_store config.
 
         This allows users to specify a credential name in the vector_store config
-        which will be resolved from litellm.credential_list.
+        which will be resolved from litellm.credential_list. When a stored
+        credential is used, its values take precedence over caller-supplied
+        equivalents so endpoint and identity fields stay consistent with the
+        credential definition.
         """
         from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 
         credential_name = self.vector_store_config.get("litellm_credential_name")
         if credential_name and litellm.credential_list:
-            credential_values = CredentialAccessor.get_credential_values(credential_name)
-            # Merge credentials into vector_store_config (don't overwrite existing values)
+            credential_values = CredentialAccessor.get_credential_values(
+                credential_name
+            )
+            if not credential_values:
+                return
             for key, value in credential_values.items():
-                if key not in self.vector_store_config:
-                    self.vector_store_config[key] = value
+                self.vector_store_config[key] = value
+            for key in (
+                "api_base",
+                "aws_sts_endpoint",
+                "aws_web_identity_token",
+            ):
+                if key in self.vector_store_config and key not in credential_values:
+                    del self.vector_store_config[key]
 
     @property
     def custom_llm_provider(self) -> str:
@@ -109,11 +123,13 @@ class BaseRAGIngestion(ABC):
 
         if file_url:
             http_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.RAG)
-            response = await http_client.get(file_url)
+            response = await async_safe_get(http_client, file_url)
             response.raise_for_status()
             file_content = response.content
             filename = file_url.split("/")[-1] or "document"
-            content_type = response.headers.get("content-type", "application/octet-stream")
+            content_type = response.headers.get(
+                "content-type", "application/octet-stream"
+            )
             return filename, file_content, content_type, None
 
         if file_id:
@@ -193,11 +209,23 @@ class BaseRAGIngestion(ABC):
         if text:
             text_to_chunk = text
         elif file_content and not ocr_was_used:
+            # Try UTF-8 decode first
             try:
                 text_to_chunk = file_content.decode("utf-8")
             except UnicodeDecodeError:
-                verbose_logger.debug("Binary file detected, skipping text chunking")
-                return []
+                # Check if it's a PDF and try to extract text
+                if file_content.startswith(b"%PDF"):
+                    verbose_logger.debug("PDF detected, attempting text extraction")
+                    text_to_chunk = extract_text_from_pdf(file_content)
+                    if not text_to_chunk:
+                        verbose_logger.debug(
+                            "PDF text extraction failed. Install 'pypdf' or 'PyPDF2' for PDF support, "
+                            "or enable OCR with a vision model."
+                        )
+                        return []
+                else:
+                    verbose_logger.debug("Binary file detected, skipping text chunking")
+                    return []
 
         if not text_to_chunk:
             return []
@@ -339,4 +367,3 @@ class BaseRAGIngestion(ABC):
                 file_id=None,
                 error=str(e),
             )
-

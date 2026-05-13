@@ -5,9 +5,11 @@ export interface UserInfo {
   user_role: string;
   spend: number;
   max_budget: number | null;
+  models: string[];
   key_count: number;
   created_at: string;
   updated_at: string;
   sso_user_id: string | null;
   budget_duration: string | null;
+  metadata?: Record<string, unknown> | null;
 }

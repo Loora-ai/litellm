@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, List, Optional
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
 from litellm.proxy._types import PassThroughGuardrailSettings
+from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -118,8 +119,13 @@ class PassThroughEndpointHandler(BaseTranslation):
             return data
 
         # Apply guardrail (pass-through doesn't modify the text, just checks it)
+        inputs = GenericGuardrailAPIInputs(texts=[text_to_check])
+        # Include model information if available
+        model = data.get("model")
+        if model:
+            inputs["model"] = model
         _guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
-            inputs={"texts": [text_to_check]},
+            inputs=inputs,
             request_data=data,
             input_type="request",
             logging_obj=litellm_logging_obj,
@@ -133,6 +139,7 @@ class PassThroughEndpointHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
         user_api_key_dict: Optional[Any] = None,
+        request_data: Optional[dict] = None,
     ) -> Any:
         """
         Process output response by applying guardrails to targeted fields.
@@ -165,21 +172,36 @@ class PassThroughEndpointHandler(BaseTranslation):
         if not text_to_check:
             return response
 
-        # Create a request_data dict with response info and user API key metadata
-        request_data: dict = (
-            {"response": response}
-            if not isinstance(response, dict)
-            else response.copy()
-        )
+        # Use the real request_data if provided (proxy path), otherwise
+        # create a standalone dict (SDK / direct-call path).
+        if request_data is None:
+            request_data = (
+                {"response": response}
+                if not isinstance(response, dict)
+                else response.copy()
+            )
+        else:
+            if "response" not in request_data:
+                request_data["response"] = (
+                    response if not isinstance(response, dict) else response.copy()
+                )
 
         # Add user API key metadata with prefixed keys
-        user_metadata = self.transform_user_api_key_dict_to_metadata(user_api_key_dict)
-        if user_metadata:
-            request_data["litellm_metadata"] = user_metadata
+        if "litellm_metadata" not in request_data:
+            user_metadata = self.transform_user_api_key_dict_to_metadata(
+                user_api_key_dict
+            )
+            if user_metadata:
+                request_data["litellm_metadata"] = user_metadata
 
         # Apply guardrail (pass-through doesn't modify the text, just checks it)
+        inputs = GenericGuardrailAPIInputs(texts=[text_to_check])
+        # Include model information from the response if available
+        response_model = response.get("model") if isinstance(response, dict) else None
+        if response_model:
+            inputs["model"] = response_model
         _guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
-            inputs={"texts": [text_to_check]},
+            inputs=inputs,
             request_data=request_data,
             input_type="response",
             logging_obj=litellm_logging_obj,

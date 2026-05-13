@@ -20,6 +20,7 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.guardrails._content_utils import iter_message_text
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.guardrails.guardrail_hooks.ibm import (
     IBMDetectorDetection,
@@ -108,6 +109,7 @@ class IBMGuardrailDetector(CustomGuardrail):
     async def _call_detector_server(
         self,
         contents: List[str],
+        event_type: GuardrailEventHooks,
         request_data: Optional[dict] = None,
     ) -> List[List[IBMDetectorDetection]]:
         """
@@ -142,7 +144,6 @@ class IBMGuardrailDetector(CustomGuardrail):
         )
 
         try:
-
             response = await self.async_handler.post(
                 url=self.api_url,
                 json=payload,
@@ -172,6 +173,7 @@ class IBMGuardrailDetector(CustomGuardrail):
                     start_time=start_time.timestamp(),
                     end_time=end_time.timestamp(),
                     duration=duration,
+                    event_type=event_type,
                 )
 
             return response_json
@@ -192,6 +194,7 @@ class IBMGuardrailDetector(CustomGuardrail):
                     start_time=start_time.timestamp(),
                     end_time=end_time.timestamp(),
                     duration=duration,
+                    event_type=event_type,
                 )
 
             raise
@@ -199,6 +202,7 @@ class IBMGuardrailDetector(CustomGuardrail):
     async def _call_orchestrator(
         self,
         content: str,
+        event_type: GuardrailEventHooks,
         request_data: Optional[dict] = None,
     ) -> List[IBMDetectorDetection]:
         """
@@ -258,6 +262,7 @@ class IBMGuardrailDetector(CustomGuardrail):
                     start_time=start_time.timestamp(),
                     end_time=end_time.timestamp(),
                     duration=duration,
+                    event_type=event_type,
                 )
 
             return response_json.get("detections", [])
@@ -278,6 +283,7 @@ class IBMGuardrailDetector(CustomGuardrail):
                     start_time=start_time.timestamp(),
                     end_time=end_time.timestamp(),
                     duration=duration,
+                    event_type=event_type,
                 )
 
             raise
@@ -458,63 +464,53 @@ class IBMGuardrailDetector(CustomGuardrail):
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             return data
 
-        _messages = data.get("messages")
-        if _messages:
-            contents_to_check: List[str] = []
-            for message in _messages:
-                _content = message.get("content")
-                if isinstance(_content, str):
-                    contents_to_check.append(_content)
+        # Covers multimodal list content + Responses-API input.
+        contents_to_check: List[str] = list(iter_message_text(data))
+        if contents_to_check:
+            if self.is_detector_server:
+                # Call detector server with all contents at once
+                result = await self._call_detector_server(
+                    contents=contents_to_check,
+                    request_data=data,
+                    event_type=GuardrailEventHooks.pre_call,
+                )
 
-            if contents_to_check:
-                if self.is_detector_server:
-                    # Call detector server with all contents at once
-                    result = await self._call_detector_server(
-                        contents=contents_to_check,
+                verbose_proxy_logger.debug(
+                    "IBM Detector Server async_pre_call_hook result: %s", result
+                )
+
+                # Check if any detections were found
+                has_violations = False
+                for message_detections in result:
+                    filtered = self._filter_detections_by_threshold(message_detections)
+                    if filtered:
+                        has_violations = True
+                        break
+
+                if has_violations and self.block_on_detection:
+                    error_message = self._create_error_message_detector_server(result)
+                    raise ValueError(error_message)
+
+            else:
+                # Call orchestrator for each content separately
+                for content in contents_to_check:
+                    orchestrator_result = await self._call_orchestrator(
+                        content=content,
                         request_data=data,
+                        event_type=GuardrailEventHooks.pre_call,
                     )
 
                     verbose_proxy_logger.debug(
-                        "IBM Detector Server async_pre_call_hook result: %s", result
+                        "IBM Orchestrator async_pre_call_hook result: %s",
+                        orchestrator_result,
                     )
 
-                    # Check if any detections were found
-                    has_violations = False
-                    for message_detections in result:
-                        filtered = self._filter_detections_by_threshold(
-                            message_detections
-                        )
-                        if filtered:
-                            has_violations = True
-                            break
-
-                    if has_violations and self.block_on_detection:
-                        error_message = self._create_error_message_detector_server(
-                            result
-                        )
-                        raise ValueError(error_message)
-
-                else:
-                    # Call orchestrator for each content separately
-                    for content in contents_to_check:
-                        orchestrator_result = await self._call_orchestrator(
-                            content=content,
-                            request_data=data,
-                        )
-
-                        verbose_proxy_logger.debug(
-                            "IBM Orchestrator async_pre_call_hook result: %s",
-                            orchestrator_result,
-                        )
-
-                        filtered = self._filter_detections_by_threshold(
+                    filtered = self._filter_detections_by_threshold(orchestrator_result)
+                    if filtered and self.block_on_detection:
+                        error_message = self._create_error_message_orchestrator(
                             orchestrator_result
                         )
-                        if filtered and self.block_on_detection:
-                            error_message = self._create_error_message_orchestrator(
-                                orchestrator_result
-                            )
-                            raise ValueError(error_message)
+                        raise ValueError(error_message)
 
         # Add guardrail to applied guardrails header
         add_guardrail_to_applied_guardrails_header(
@@ -543,63 +539,53 @@ class IBMGuardrailDetector(CustomGuardrail):
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             return
 
-        _messages = data.get("messages")
-        if _messages:
-            contents_to_check: List[str] = []
-            for message in _messages:
-                _content = message.get("content")
-                if isinstance(_content, str):
-                    contents_to_check.append(_content)
+        # Covers multimodal list content + Responses-API input.
+        contents_to_check: List[str] = list(iter_message_text(data))
+        if contents_to_check:
+            if self.is_detector_server:
+                # Call detector server with all contents at once
+                result = await self._call_detector_server(
+                    contents=contents_to_check,
+                    request_data=data,
+                    event_type=GuardrailEventHooks.during_call,
+                )
 
-            if contents_to_check:
-                if self.is_detector_server:
-                    # Call detector server with all contents at once
-                    result = await self._call_detector_server(
-                        contents=contents_to_check,
+                verbose_proxy_logger.debug(
+                    "IBM Detector Server async_moderation_hook result: %s", result
+                )
+
+                # Check if any detections were found
+                has_violations = False
+                for message_detections in result:
+                    filtered = self._filter_detections_by_threshold(message_detections)
+                    if filtered:
+                        has_violations = True
+                        break
+
+                if has_violations and self.block_on_detection:
+                    error_message = self._create_error_message_detector_server(result)
+                    raise ValueError(error_message)
+
+            else:
+                # Call orchestrator for each content separately
+                for content in contents_to_check:
+                    orchestrator_result = await self._call_orchestrator(
+                        content=content,
                         request_data=data,
+                        event_type=GuardrailEventHooks.during_call,
                     )
 
                     verbose_proxy_logger.debug(
-                        "IBM Detector Server async_moderation_hook result: %s", result
+                        "IBM Orchestrator async_moderation_hook result: %s",
+                        orchestrator_result,
                     )
 
-                    # Check if any detections were found
-                    has_violations = False
-                    for message_detections in result:
-                        filtered = self._filter_detections_by_threshold(
-                            message_detections
-                        )
-                        if filtered:
-                            has_violations = True
-                            break
-
-                    if has_violations and self.block_on_detection:
-                        error_message = self._create_error_message_detector_server(
-                            result
-                        )
-                        raise ValueError(error_message)
-
-                else:
-                    # Call orchestrator for each content separately
-                    for content in contents_to_check:
-                        orchestrator_result = await self._call_orchestrator(
-                            content=content,
-                            request_data=data,
-                        )
-
-                        verbose_proxy_logger.debug(
-                            "IBM Orchestrator async_moderation_hook result: %s",
-                            orchestrator_result,
-                        )
-
-                        filtered = self._filter_detections_by_threshold(
+                    filtered = self._filter_detections_by_threshold(orchestrator_result)
+                    if filtered and self.block_on_detection:
+                        error_message = self._create_error_message_orchestrator(
                             orchestrator_result
                         )
-                        if filtered and self.block_on_detection:
-                            error_message = self._create_error_message_orchestrator(
-                                orchestrator_result
-                            )
-                            raise ValueError(error_message)
+                        raise ValueError(error_message)
 
         # Add guardrail to applied guardrails header
         add_guardrail_to_applied_guardrails_header(
@@ -673,6 +659,7 @@ class IBMGuardrailDetector(CustomGuardrail):
                     result = await self._call_detector_server(
                         contents=contents_to_check,
                         request_data=data,
+                        event_type=GuardrailEventHooks.post_call,
                     )
 
                     verbose_proxy_logger.debug(
@@ -702,6 +689,7 @@ class IBMGuardrailDetector(CustomGuardrail):
                         orchestrator_result = await self._call_orchestrator(
                             content=content,
                             request_data=data,
+                            event_type=GuardrailEventHooks.post_call,
                         )
 
                         verbose_proxy_logger.debug(

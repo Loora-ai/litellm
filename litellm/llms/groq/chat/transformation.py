@@ -1,6 +1,7 @@
 """
 Translate from OpenAI's `/v1/chat/completions` to Groq's `/v1/chat/completions`
 """
+
 from typing import (
     Any,
     Coroutine,
@@ -115,8 +116,7 @@ class GroqChatConfig(OpenAILikeChatConfig):
     @overload
     def _transform_messages(
         self, messages: List[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[Any, Any, List[AllMessageValues]]:
-        ...
+    ) -> Coroutine[Any, Any, List[AllMessageValues]]: ...
 
     @overload
     def _transform_messages(
@@ -124,8 +124,7 @@ class GroqChatConfig(OpenAILikeChatConfig):
         messages: List[AllMessageValues],
         model: str,
         is_async: Literal[False] = False,
-    ) -> List[AllMessageValues]:
-        ...
+    ) -> List[AllMessageValues]: ...
 
     def _transform_messages(
         self, messages: List[AllMessageValues], model: str, is_async: bool = False
@@ -293,10 +292,10 @@ class GroqChatConfig(OpenAILikeChatConfig):
             json_mode=json_mode,
         )
 
-        mapped_service_tier: Literal[
-            "auto", "default", "flex"
-        ] = self._map_groq_service_tier(
-            original_service_tier=getattr(model_response, "service_tier")
+        mapped_service_tier: Literal["auto", "default", "flex"] = (
+            self._map_groq_service_tier(
+                original_service_tier=getattr(model_response, "service_tier")
+            )
         )
         setattr(model_response, "service_tier", mapped_service_tier)
         return model_response
@@ -322,5 +321,13 @@ class GroqChatCompletionStreamingHandler(OpenAIChatCompletionStreamingHandler):
             raise OpenAIError(
                 status_code=error.get("code"), message=error.get("message"), body=error
             )
+
+        # Map Groq's 'reasoning' field to LiteLLM's 'reasoning_content' field
+        # Groq returns delta.reasoning, but LiteLLM expects delta.reasoning_content
+        choices = chunk.get("choices", [])
+        for choice in choices:
+            delta = choice.get("delta", {})
+            if "reasoning" in delta:
+                delta["reasoning_content"] = delta.pop("reasoning")
 
         return super().chunk_parser(chunk)
