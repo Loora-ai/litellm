@@ -22,8 +22,8 @@ services:
       # is auto-refreshed alongside the writer.
       # DATABASE_URL_READ_REPLICA: "postgresql://llmproxy:dbpassword9090@db-reader:5432/litellm"
       STORE_MODEL_IN_DB: "True" # allows adding models to proxy via UI
-    env_file:
-      - .env # Load local .env file
+    env_file: []
+      # - .env # Load local .env file?
     depends_on:
       - db  # Indicates that this service depends on the 'db' service, ensuring 'db' starts first
     healthcheck:  # Defines the health check configuration for the container
