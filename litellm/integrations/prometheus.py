@@ -1768,6 +1768,11 @@ class PrometheusLogger(CustomLogger):
             model_id = _metadata.get("model_info", {}).get("id") or request_data.get(
                 "model_info", {}
             ).get("id")
+            _litellm_params = request_data.get("litellm_params", {}) or {}
+            api_base = _litellm_params.get("api_base") or _metadata.get("api_base")
+            api_provider = _litellm_params.get("custom_llm_provider") or _metadata.get(
+                "custom_llm_provider"
+            )
             enum_values = UserAPIKeyLabelValues(
                 end_user=user_api_key_dict.end_user_id,
                 user=user_api_key_dict.user_id,
@@ -1787,6 +1792,8 @@ class PrometheusLogger(CustomLogger):
                 client_ip=_metadata.get("requester_ip_address"),
                 user_agent=_metadata.get("user_agent"),
                 model_id=model_id,
+                api_base=api_base,
+                api_provider=api_provider,
                 stream=(
                     str(request_data.get("stream"))
                     if litellm.prometheus_emit_stream_label
@@ -2500,6 +2507,17 @@ class PrometheusLogger(CustomLogger):
         )
         _new_model = kwargs.get("model")
         _tags = cast(List[str], kwargs.get("tags") or [])
+        _litellm_params = kwargs.get("litellm_params", {}) or {}
+        _standard_logging_object = kwargs.get("standard_logging_object", {}) or {}
+        api_base = _standard_logging_object.get("api_base") or _litellm_params.get(
+            "api_base"
+        )
+        api_provider = _standard_logging_object.get(
+            "custom_llm_provider"
+        ) or _litellm_params.get("custom_llm_provider")
+        model_id = _standard_logging_object.get("model_id") or _metadata.get(
+            "model_info", {}
+        ).get("id")
 
         enum_values = UserAPIKeyLabelValues(
             requested_model=original_model_group,
@@ -2511,6 +2529,9 @@ class PrometheusLogger(CustomLogger):
             exception_status=str(getattr(original_exception, "status_code", None)),
             exception_class=self._get_exception_class_name(original_exception),
             tags=_tags,
+            model_id=model_id,
+            api_base=api_base,
+            api_provider=api_provider,
         )
         PrometheusLogger._inc_labeled_counter(
             self,
@@ -2545,6 +2566,17 @@ class PrometheusLogger(CustomLogger):
                 metadata=_metadata
             )
         )
+        _litellm_params = kwargs.get("litellm_params", {}) or {}
+        _standard_logging_object = kwargs.get("standard_logging_object", {}) or {}
+        api_base = _standard_logging_object.get("api_base") or _litellm_params.get(
+            "api_base"
+        )
+        api_provider = _standard_logging_object.get(
+            "custom_llm_provider"
+        ) or _litellm_params.get("custom_llm_provider")
+        model_id = _standard_logging_object.get("model_id") or _metadata.get(
+            "model_info", {}
+        ).get("id")
 
         enum_values = UserAPIKeyLabelValues(
             requested_model=original_model_group,
@@ -2556,6 +2588,9 @@ class PrometheusLogger(CustomLogger):
             exception_status=str(getattr(original_exception, "status_code", None)),
             exception_class=self._get_exception_class_name(original_exception),
             tags=_tags,
+            model_id=model_id,
+            api_base=api_base,
+            api_provider=api_provider,
         )
 
         PrometheusLogger._inc_labeled_counter(
