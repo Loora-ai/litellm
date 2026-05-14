@@ -23,6 +23,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system-path
 
 import litellm
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.proxy_server import app, initialize
 from litellm.utils import _invalidate_model_cost_lowercase_map
@@ -6591,3 +6592,52 @@ async def test_get_current_spend_redis_error_falls_back_to_in_memory():
     finally:
         ps.spend_counter_cache = orig_counter
         ps.prisma_client = orig_prisma
+
+
+class TestTransformRequestBannedParams:
+    """
+    /utils/transform_request applies the same banned-param check as LLM endpoints.
+
+    Without this check, any authenticated user could supply aws_sts_endpoint,
+    api_base, etc. and have the server forward its credentials to an
+    attacker-controlled endpoint during SDK credential resolution.
+    """
+
+    @pytest.fixture
+    def client(self):
+        mock_auth = UserAPIKeyAuth(
+            user_id="test-internal",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+        original = app.dependency_overrides.copy()
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_auth
+        try:
+            yield TestClient(app)
+        finally:
+            app.dependency_overrides = original
+
+    @pytest.mark.parametrize(
+        "banned",
+        [
+            "aws_sts_endpoint",
+            "api_base",
+            "aws_web_identity_token",
+            "vertex_credentials",
+        ],
+    )
+    def test_banned_params_rejected_for_all_users(self, client, banned):
+        """Banned params must be blocked for any authenticated user."""
+        response = client.post(
+            "/utils/transform_request",
+            json={
+                "call_type": "completion",
+                "request_body": {
+                    "model": "gpt-3.5-turbo",
+                    banned: "https://attacker.example",
+                },
+            },
+        )
+        assert response.status_code == 400, (
+            f"Expected 400 for banned param '{banned}', "
+            f"got {response.status_code}: {response.json()}"
+        )
