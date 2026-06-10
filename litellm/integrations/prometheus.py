@@ -2822,6 +2822,17 @@ class PrometheusLogger(CustomLogger):
         )
         _new_model = kwargs.get("model")
         _tags = cast(List[str], kwargs.get("tags") or [])
+        _litellm_params = kwargs.get("litellm_params", {}) or {}
+        _standard_logging_object = kwargs.get("standard_logging_object", {}) or {}
+        api_base = _standard_logging_object.get("api_base") or _litellm_params.get(
+            "api_base"
+        )
+        api_provider = _standard_logging_object.get(
+            "custom_llm_provider"
+        ) or _litellm_params.get("custom_llm_provider")
+        model_id = _standard_logging_object.get("model_id") or _metadata.get(
+            "model_info", {}
+        ).get("id")
 
         enum_values = UserAPIKeyLabelValues(
             requested_model=original_model_group,
@@ -2833,6 +2844,8 @@ class PrometheusLogger(CustomLogger):
             exception_status=str(getattr(original_exception, "status_code", None)),
             exception_class=self._get_exception_class_name(original_exception),
             tags=_tags,
+            api_base=api_base,
+            api_provider=api_provider,
         )
         PrometheusLogger._inc_labeled_counter(
             self,
@@ -2867,6 +2880,17 @@ class PrometheusLogger(CustomLogger):
                 metadata=_metadata
             )
         )
+        _litellm_params = kwargs.get("litellm_params", {}) or {}
+        _standard_logging_object = kwargs.get("standard_logging_object", {}) or {}
+        api_base = _standard_logging_object.get("api_base") or _litellm_params.get(
+            "api_base"
+        )
+        api_provider = _standard_logging_object.get(
+            "custom_llm_provider"
+        ) or _litellm_params.get("custom_llm_provider")
+        model_id = _standard_logging_object.get("model_id") or _metadata.get(
+            "model_info", {}
+        ).get("id")
 
         enum_values = UserAPIKeyLabelValues(
             requested_model=original_model_group,
@@ -2878,6 +2902,8 @@ class PrometheusLogger(CustomLogger):
             exception_status=str(getattr(original_exception, "status_code", None)),
             exception_class=self._get_exception_class_name(original_exception),
             tags=_tags,
+            api_base=api_base,
+            api_provider=api_provider,
         )
 
         PrometheusLogger._inc_labeled_counter(
