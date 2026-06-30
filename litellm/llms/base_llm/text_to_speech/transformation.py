@@ -131,9 +131,13 @@ class BaseTextToSpeechConfig(ABC):
         model: str,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-    ) -> "HttpxBinaryResponseContent":
+    ) -> Union["HttpxBinaryResponseContent", Dict[str, Any]]:
         """
-        Transform provider response to standard format
+        Transform provider response to standard format.
+
+        Returns:
+            HttpxBinaryResponseContent for standard binary audio responses
+            Dict for providers returning JSON (e.g., ElevenLabs with_timestamps)
         """
         pass
 

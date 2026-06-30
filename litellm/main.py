@@ -7087,6 +7087,17 @@ def speech(  # noqa: PLR0915
                 ElevenLabsTextToSpeechConfig.ELEVENLABS_QUERY_PARAMS_KEY
             ] = query_params
 
+        # Extract with_timestamps flag for ElevenLabs TTS with alignment data
+        # Can be passed via kwargs or optional_params (from extra_body)
+        with_timestamps = kwargs.pop(
+            ElevenLabsTextToSpeechConfig.ELEVENLABS_WITH_TIMESTAMPS_KEY, None
+        )
+        if with_timestamps is None:
+            with_timestamps = optional_params.get("with_timestamps", False)
+        litellm_params_dict[
+            ElevenLabsTextToSpeechConfig.ELEVENLABS_WITH_TIMESTAMPS_KEY
+        ] = with_timestamps
+
         litellm_params_dict[ElevenLabsTextToSpeechConfig.ELEVENLABS_VOICE_ID_KEY] = (
             voice_id
         )
