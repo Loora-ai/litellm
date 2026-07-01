@@ -9106,6 +9106,13 @@ async def audio_speech(
             hidden_params=hidden_params,
         )
 
+        # Check if response is a dict (e.g., ElevenLabs with_timestamps returns JSON)
+        if isinstance(response, dict):
+            return ORJSONResponse(
+                content=response,
+                headers=custom_headers,
+            )
+
         # Determine media type based on model type
         media_type = "audio/mpeg"  # Default for OpenAI TTS
         request_model = data.get("model", "")
