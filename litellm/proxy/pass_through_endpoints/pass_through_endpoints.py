@@ -629,6 +629,11 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         if metadata:
             _metadata.update(metadata)
 
+        _metadata = _update_metadata_with_custom_metadata_header(
+            request=request,
+            metadata=_metadata,
+        )
+
         _metadata = _update_metadata_with_tags_in_header(
             request=request,
             metadata=_metadata,
@@ -1223,6 +1228,43 @@ async def pass_through_request(  # noqa: PLR0915
                 code=getattr(e, "status_code", 500),
                 headers=custom_headers,
             )
+
+
+def _update_metadata_with_custom_metadata_header(request: Request, metadata: dict) -> dict:
+    """
+    If a JSON-encoded metadata blob is in the 'x-litellm-metadata' request header, merge
+    it into metadata.
+
+    For multipart/form-data pass-through requests (e.g. audio/file uploads), the request
+    body is never parsed into `_parsed_body` (see is_multipart handling above), so a
+    `metadata` key in the body - which is how JSON pass-through requests attach custom
+    metadata - never reaches here. Headers are the only per-request channel that's read
+    identically for both body types, so this is the one place a multipart caller can
+    attach structured metadata (e.g. for custom_prometheus_metadata_labels) rather than
+    just the flat 'tags' list handled by _update_metadata_with_tags_in_header below.
+    """
+    _custom_metadata_header = request.headers.get("x-litellm-metadata")
+    if not _custom_metadata_header:
+        return metadata
+
+    try:
+        _custom_metadata = json.loads(_custom_metadata_header)
+    except (json.JSONDecodeError, TypeError):
+        verbose_proxy_logger.warning(
+            "Ignoring malformed x-litellm-metadata header (not valid JSON): %s",
+            _custom_metadata_header,
+        )
+        return metadata
+
+    if isinstance(_custom_metadata, dict):
+        metadata.update(_custom_metadata)
+    else:
+        verbose_proxy_logger.warning(
+            "Ignoring x-litellm-metadata header - expected a JSON object, got %s",
+            type(_custom_metadata).__name__,
+        )
+
+    return metadata
 
 
 def _update_metadata_with_tags_in_header(request: Request, metadata: dict) -> dict:
