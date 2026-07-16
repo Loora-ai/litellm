@@ -273,6 +273,10 @@ async def speechace_score(
         _parsed_body=request_data,
         litellm_call_id=litellm_call_id,
     )
+    # deployment_state / deployment_* metrics read api_provider from
+    # litellm_params.custom_llm_provider; request latency uses the success
+    # handler's custom_llm_provider field instead.
+    kwargs["litellm_params"]["custom_llm_provider"] = "speechace"
     logging_obj.model_call_details["custom_llm_provider"] = "speechace"
     logging_obj.model_call_details["litellm_params"] = kwargs["litellm_params"]
     logging_obj.update_environment_variables(
