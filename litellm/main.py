@@ -6642,6 +6642,7 @@ def transcription(
             "preset_cache_key": None,
             "stream_response": {},
             **kwargs,
+            "custom_llm_provider": custom_llm_provider,
         },
         custom_llm_provider=custom_llm_provider,
     )
