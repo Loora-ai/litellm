@@ -811,10 +811,10 @@ async def pass_through_request(  # noqa: PLR0915
 
             # Create a new URL with the merged query params
             merged_params = HttpPassThroughEndpointHelpers.get_merged_query_parameters(
-                existing_url=url,
-                request_query_params=request_params,
-                default_query_params=default_query_params,
-            )
+                        existing_url=url,
+                        request_query_params=request_params,
+                        default_query_params=default_query_params,
+                    )
             encoded_query = urlencode(merged_params)
             url = url.copy_with(query=encoded_query.encode("ascii"))
 
