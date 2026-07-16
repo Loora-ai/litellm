@@ -1,9 +1,10 @@
 import asyncio
 import os
 from datetime import datetime
-from typing import Dict, List, Optional, Union
+from typing import AsyncIterator, Dict, List, Optional, Union
 from urllib.parse import urlencode
 
+import fastapi
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 
@@ -11,7 +12,29 @@ from litellm._uuid import uuid
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
+from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHandler
+from litellm.proxy.auth.auth_utils import (
+    get_end_user_id_from_request_body,
+    get_request_route,
+    normalize_request_route,
+)
+from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.auth.user_api_key_auth import (
+    _ensure_parent_otel_span_on_request_state,
+    _run_centralized_common_checks,
+    _user_api_key_auth_builder,
+    anthropic_api_key_header,
+    api_key_header,
+    azure_api_key_header,
+    azure_apim_header,
+    custom_litellm_key_header,
+    google_ai_studio_api_key_header,
+)
+from litellm.proxy.common_utils.http_parsing_utils import (
+    _safe_get_request_headers,
+    populate_request_with_path_params,
+)
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     HttpPassThroughEndpointHelpers,
     get_response_body,
@@ -62,12 +85,103 @@ def _build_speechace_url(
     return url.copy_with(query=urlencode(merged_query_params).encode("ascii"))
 
 
+async def speechace_user_api_key_auth(
+    request: Request,
+    api_key: str = fastapi.Security(api_key_header),
+    azure_api_key_header_value: str = fastapi.Security(azure_api_key_header),
+    anthropic_api_key_header_value: Optional[str] = fastapi.Security(
+        anthropic_api_key_header
+    ),
+    google_ai_studio_api_key_header_value: Optional[str] = fastapi.Security(
+        google_ai_studio_api_key_header
+    ),
+    azure_apim_header_value: Optional[str] = fastapi.Security(azure_apim_header),
+    custom_litellm_key_header_value: Optional[str] = fastapi.Security(
+        custom_litellm_key_header
+    ),
+) -> UserAPIKeyAuth:
+    """
+    LiteLLM key auth for SpeechAce that never consumes the request body.
+
+    Multipart audio must remain unread so it can stream upstream.
+    Key/team/budget/route checks still run against headers + empty body data.
+    End-user attribution uses ``x-litellm-end-user-id`` when present.
+    """
+    _ensure_parent_otel_span_on_request_state(request)
+
+    request_data = populate_request_with_path_params(
+        request_data={},
+        request=request,
+    )
+    route: str = get_request_route(request=request)
+
+    user_api_key_auth_obj = await _user_api_key_auth_builder(
+        request=request,
+        api_key=api_key,
+        azure_api_key_header=azure_api_key_header_value,
+        anthropic_api_key_header=anthropic_api_key_header_value,
+        google_ai_studio_api_key_header=google_ai_studio_api_key_header_value,
+        azure_apim_header=azure_apim_header_value,
+        request_data=request_data,
+        custom_litellm_key_header=custom_litellm_key_header_value,
+    )
+    user_api_key_auth_obj.budget_reservation = None
+
+    RouteChecks.should_call_route(route=route, valid_token=user_api_key_auth_obj)
+
+    try:
+        await _run_centralized_common_checks(
+            user_api_key_auth_obj=user_api_key_auth_obj,
+            request=request,
+            request_data=request_data,
+            route=route,
+        )
+    except Exception as e:
+        return await UserAPIKeyAuthExceptionHandler._handle_authentication_error(
+            e=e,
+            request=request,
+            request_data=request_data,
+            route=route,
+            parent_otel_span=user_api_key_auth_obj.parent_otel_span,
+            api_key=api_key,
+        )
+
+    if user_api_key_auth_obj.end_user_id is None:
+        from litellm.proxy.proxy_server import (
+            prisma_client,
+            proxy_logging_obj,
+            user_api_key_cache,
+        )
+
+        raw_end_user_id = get_end_user_id_from_request_body(
+            request_data, _safe_get_request_headers(request)
+        )
+        if raw_end_user_id is not None:
+            resolved_end_user_id = await resolve_and_validate_end_user_id(
+                raw_end_user_id=raw_end_user_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=user_api_key_auth_obj.parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+                route=route,
+            )
+            if resolved_end_user_id is not None:
+                user_api_key_auth_obj.end_user_id = resolved_end_user_id
+
+    user_api_key_auth_obj.request_route = normalize_request_route(route)
+    return user_api_key_auth_obj
+
+
+async def _stream_request_body(request: Request) -> AsyncIterator[bytes]:
+    async for chunk in request.stream():
+        yield chunk
+
+
 async def _send_speechace_request(
     request: Request,
     url: httpx.URL,
     headers: Dict[str, str],
 ) -> httpx.Response:
-    raw_body = await request.body()
     async_client = get_async_httpx_client(
         llm_provider=httpxSpecialProvider.PassThroughEndpoint,
         params={"timeout": 10},
@@ -76,7 +190,7 @@ async def _send_speechace_request(
         method="POST",
         url=url,
         headers=headers,
-        content=raw_body,
+        content=_stream_request_body(request),
     )
 
 
@@ -100,7 +214,7 @@ async def _log_speechace_failure(
 )
 async def speechace_score(
     request: Request,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    user_api_key_dict: UserAPIKeyAuth = Depends(speechace_user_api_key_auth),
 ) -> Response:
     from litellm.proxy.proxy_server import proxy_logging_obj
 
@@ -116,6 +230,9 @@ async def speechace_score(
     accept = request.headers.get("accept")
     if accept:
         headers["accept"] = accept
+    content_length = request.headers.get("content-length")
+    if content_length:
+        headers["content-length"] = content_length
 
     url = _build_speechace_url(
         target_url=environment["target_url"],
