@@ -6912,6 +6912,9 @@ def speech(  # noqa: PLR0915
             "preset_cache_key": None,
             "stream_response": {},
             **kwargs,
+            # Required for Prometheus deployment_* metrics (api_provider label).
+            # custom_llm_provider is a named arg so it is not in **kwargs.
+            "custom_llm_provider": custom_llm_provider,
         },
         custom_llm_provider=custom_llm_provider,
     )
