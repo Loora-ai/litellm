@@ -428,6 +428,8 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/rag/query",
     ]
 
+    speechace_routes = ["/v1/speechace/score"]
+
     anthropic_routes = [
         "/v1/messages",
         "/v1/messages/count_tokens",
@@ -500,6 +502,7 @@ class LiteLLMRoutes(enum.Enum):
         + apply_guardrail_routes
         + mcp_inference_routes
         + litellm_native_routes
+        + speechace_routes
         + agent_routes
     )
     info_routes = [

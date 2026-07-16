@@ -557,6 +557,14 @@ class Logging(LiteLLMLoggingBaseClass):
             **self.litellm_params,
             **scrub_sensitive_keys_in_metadata(litellm_params),
         }
+        # Callers often pass custom_llm_provider as a separate kwarg (it lands on
+        # model_call_details only). Prometheus deployment_* metrics read
+        # api_provider from litellm_params.custom_llm_provider, so sync it here.
+        custom_llm_provider = additional_params.get(
+            "custom_llm_provider"
+        ) or self.litellm_params.get("custom_llm_provider")
+        if custom_llm_provider:
+            self.litellm_params["custom_llm_provider"] = custom_llm_provider
         self.litellm_request_debug = litellm_params.get("litellm_request_debug", False)
         self.logger_fn = litellm_params.get("logger_fn", None)
         if _is_debugging_on() or self.litellm_request_debug:

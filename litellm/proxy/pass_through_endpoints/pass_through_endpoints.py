@@ -85,6 +85,78 @@ def get_response_body(response: httpx.Response) -> Optional[dict]:
         return None
 
 
+def resolve_env_variable(value: Optional[str]) -> Optional[str]:
+    """
+    Resolve os.environ/ references in a string value.
+    
+    If the value starts with 'os.environ/', replace it with the environment variable.
+    If the value contains 'os.environ/' anywhere, replace that portion.
+    
+    Examples:
+        "os.environ/MY_API_KEY" -> "<value of MY_API_KEY>"
+        "https://api.example.com?key=os.environ/API_KEY" -> "https://api.example.com?key=<value>"
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        return value
+    if "os.environ/" not in value:
+        return value
+    
+    verbose_proxy_logger.debug(
+        "resolve_env_variable - input value: %s", value
+    )
+    
+    # Handle case where entire value is os.environ/VAR_NAME
+    if value.startswith("os.environ/"):
+        resolved = get_secret_str(value)
+        verbose_proxy_logger.debug(
+            "resolve_env_variable - resolved to: %s", resolved[:50] if resolved else None
+        )
+        return resolved if resolved is not None else value
+    
+    # Handle case where os.environ/ is embedded in the string
+    start_index = value.find("os.environ/")
+    if start_index != -1:
+        # Extract the variable reference (until end of string or next special char)
+        _variable_name = value[start_index:]
+        # Find end of variable name (space, &, or end of string)
+        for end_char in [" ", "&", "?", "#"]:
+            end_idx = _variable_name.find(end_char)
+            if end_idx != -1:
+                _variable_name = _variable_name[:end_idx]
+                break
+        
+        _secret_value = get_secret_str(_variable_name)
+        if _secret_value is not None:
+            return value.replace(_variable_name, _secret_value)
+    
+    return value
+
+
+def resolve_env_variables_in_dict(params: Optional[dict]) -> Optional[dict]:
+    """
+    Resolve os.environ/ references in dictionary values.
+    
+    Iterates through all values in the dict and resolves any os.environ/ references.
+    
+    Examples:
+        {"key": "os.environ/API_KEY", "user_id": "os.environ/USER_ID"}
+        -> {"key": "<resolved_key>", "user_id": "<resolved_user_id>"}
+    """
+    if params is None:
+        return None
+    
+    resolved = {}
+    for key, value in params.items():
+        if isinstance(value, str):
+            resolved[key] = resolve_env_variable(value)
+        else:
+            resolved[key] = value
+    
+    return resolved
+
+
 async def set_env_variables_in_header(custom_headers: Optional[dict]) -> Optional[dict]:
     """
     checks if any headers on config.yaml are defined as os.environ/COHERE_API_KEY etc
@@ -500,11 +572,23 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
             )
             return await async_client.send(req, stream=True)
 
+        # Merge requested_query_params into URL if URL already has query params
+        # httpx replaces query params when you pass both url with params AND params= arg
+        final_url = url
+        if requested_query_params:
+            existing_query = url.query.decode("utf-8") if url.query else ""
+            if existing_query:
+                # URL already has params, merge them
+                merged = existing_query + "&" + urlencode(requested_query_params)
+                final_url = url.copy_with(query=merged.encode("ascii"))
+            else:
+                # No existing params, add the new ones
+                final_url = url.copy_with(query=urlencode(requested_query_params).encode("ascii"))
+        
         return await async_client.request(
             method=request.method,
-            url=url,
+            url=final_url,
             headers=headers_copy,
-            params=requested_query_params,
             files=files,
             data=form_data_dict,
         )
@@ -544,6 +628,11 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
             _metadata.update(litellm_metadata)
         if metadata:
             _metadata.update(metadata)
+
+        _metadata = _update_metadata_with_custom_metadata_header(
+            request=request,
+            metadata=_metadata,
+        )
 
         _metadata = _update_metadata_with_tags_in_header(
             request=request,
@@ -721,15 +810,13 @@ async def pass_through_request(  # noqa: PLR0915
             request_params = dict(request.query_params) if merge_query_params else {}
 
             # Create a new URL with the merged query params
-            url = url.copy_with(
-                query=urlencode(
-                    HttpPassThroughEndpointHelpers.get_merged_query_parameters(
+            merged_params = HttpPassThroughEndpointHelpers.get_merged_query_parameters(
                         existing_url=url,
                         request_query_params=request_params,
                         default_query_params=default_query_params,
                     )
-                ).encode("ascii")
-            )
+            encoded_query = urlencode(merged_params)
+            url = url.copy_with(query=encoded_query.encode("ascii"))
 
         endpoint_type: EndpointType = HttpPassThroughEndpointHelpers.get_endpoint_type(
             str(url)
@@ -775,8 +862,9 @@ async def pass_through_request(  # noqa: PLR0915
 
         ## LOGGING OBJECT ## - initialize before pre_call_hook so guardrails can access it
         start_time = datetime.now()
+        _model_name = f"pass-through/{custom_llm_provider}" if custom_llm_provider else "unknown"
         logging_obj = Logging(
-            model="unknown",
+            model=_model_name,
             messages=[{"role": "user", "content": safe_dumps(_parsed_body)}],
             stream=False,
             call_type="pass_through_endpoint",
@@ -828,7 +916,7 @@ async def pass_through_request(  # noqa: PLR0915
 
         # done for supporting 'parallel_request_limiter.py' with pass-through endpoints
         logging_obj.update_environment_variables(
-            model="unknown",
+            model=_model_name,
             user="unknown",
             optional_params={},
             litellm_params=kwargs["litellm_params"],
@@ -1140,6 +1228,43 @@ async def pass_through_request(  # noqa: PLR0915
                 code=getattr(e, "status_code", 500),
                 headers=custom_headers,
             )
+
+
+def _update_metadata_with_custom_metadata_header(request: Request, metadata: dict) -> dict:
+    """
+    If a JSON-encoded metadata blob is in the 'x-litellm-metadata' request header, merge
+    it into metadata.
+
+    For multipart/form-data pass-through requests (e.g. audio/file uploads), the request
+    body is never parsed into `_parsed_body` (see is_multipart handling above), so a
+    `metadata` key in the body - which is how JSON pass-through requests attach custom
+    metadata - never reaches here. Headers are the only per-request channel that's read
+    identically for both body types, so this is the one place a multipart caller can
+    attach structured metadata (e.g. for custom_prometheus_metadata_labels) rather than
+    just the flat 'tags' list handled by _update_metadata_with_tags_in_header below.
+    """
+    _custom_metadata_header = request.headers.get("x-litellm-metadata")
+    if not _custom_metadata_header:
+        return metadata
+
+    try:
+        _custom_metadata = json.loads(_custom_metadata_header)
+    except (json.JSONDecodeError, TypeError):
+        verbose_proxy_logger.warning(
+            "Ignoring malformed x-litellm-metadata header (not valid JSON): %s",
+            _custom_metadata_header,
+        )
+        return metadata
+
+    if isinstance(_custom_metadata, dict):
+        metadata.update(_custom_metadata)
+    else:
+        verbose_proxy_logger.warning(
+            "Ignoring x-litellm-metadata header - expected a JSON object, got %s",
+            type(_custom_metadata).__name__,
+        )
+
+    return metadata
 
 
 def _update_metadata_with_tags_in_header(request: Request, metadata: dict) -> dict:
@@ -2030,6 +2155,7 @@ class InitPassThroughEndpointHelpers:
         methods: Optional[List[str]] = None,
         default_query_params: Optional[dict] = None,
         config_file_path: Optional[str] = None,
+        custom_llm_provider: Optional[str] = None,
     ):
         """Add exact path route for pass-through endpoint"""
         # Default to all methods if none specified (backward compatibility)
@@ -2070,6 +2196,7 @@ class InitPassThroughEndpointHelpers:
                 default_query_params=default_query_params,
                 guardrails=guardrails,
                 config_file_path=config_file_path,
+                custom_llm_provider=custom_llm_provider,
             ),
             methods=methods,
             dependencies=dependencies,
@@ -2108,6 +2235,7 @@ class InitPassThroughEndpointHelpers:
         methods: Optional[List[str]] = None,
         default_query_params: Optional[dict] = None,
         config_file_path: Optional[str] = None,
+        custom_llm_provider: Optional[str] = None,
     ):
         """Add wildcard route for sub-paths"""
         # Default to all methods if none specified (backward compatibility)
@@ -2149,6 +2277,7 @@ class InitPassThroughEndpointHelpers:
                 default_query_params=default_query_params,
                 guardrails=guardrails,
                 config_file_path=config_file_path,
+                custom_llm_provider=custom_llm_provider,
             ),
             methods=methods,
             dependencies=dependencies,
@@ -2324,7 +2453,8 @@ async def _register_pass_through_endpoint(
         endpoint_data["id"] = str(uuid.uuid4())
     endpoint_id = cast(str, endpoint_data["id"])
 
-    target = endpoint_data.get("target")
+    raw_target = endpoint_data.get("target")
+    target = resolve_env_variable(raw_target)
     path = endpoint_data.get("path")
     if path is None:
         raise ValueError("Path is required for pass-through endpoint")
@@ -2334,7 +2464,9 @@ async def _register_pass_through_endpoint(
     )
     forward_headers = endpoint_data.get("forward_headers")
     merge_query_params = endpoint_data.get("merge_query_params")
-    default_query_params = endpoint_data.get("default_query_params")
+    default_query_params = resolve_env_variables_in_dict(
+        endpoint_data.get("default_query_params")
+    )
     auth = endpoint_data.get("auth")
     dependencies = None
 
@@ -2353,6 +2485,7 @@ async def _register_pass_through_endpoint(
     guardrails = endpoint_data.get("guardrails")
     methods = endpoint_data.get("methods")
     cost_per_request = endpoint_data.get("cost_per_request")
+    custom_llm_provider = endpoint_data.get("custom_llm_provider")
 
     verbose_proxy_logger.debug(
         "Initializing pass through endpoint: %s (ID: %s)", path, endpoint_id
@@ -2371,6 +2504,7 @@ async def _register_pass_through_endpoint(
         methods=methods,
         default_query_params=default_query_params,
         config_file_path=config_file_path,
+        custom_llm_provider=custom_llm_provider,
     )
 
     methods_for_key = methods if methods else ["GET", "POST", "PUT", "DELETE", "PATCH"]
@@ -2396,6 +2530,7 @@ async def _register_pass_through_endpoint(
             methods=methods,
             default_query_params=default_query_params,
             config_file_path=config_file_path,
+            custom_llm_provider=custom_llm_provider,
         )
         visited_endpoints.add(f"{endpoint_id}:subpath:{path}:{methods_str}")
 
