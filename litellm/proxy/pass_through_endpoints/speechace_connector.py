@@ -46,9 +46,14 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
 )
 
 router = APIRouter()
+_cached_speechace_environment: Optional[Dict[str, str]] = None
 
 
 def _get_required_speechace_environment() -> Dict[str, str]:
+    global _cached_speechace_environment
+    if _cached_speechace_environment is not None:
+        return _cached_speechace_environment
+
     environment = {
         "target_url": os.getenv("SPEECHACE_TARGET_URL", ""),
         "api_key": os.getenv("SPEECHACE_API_KEY", ""),
@@ -68,6 +73,7 @@ def _get_required_speechace_environment() -> Dict[str, str]:
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"Missing SpeechAce configuration: {', '.join(missing_variables)}",
         )
+    _cached_speechace_environment = environment
     return environment
 
 
@@ -194,57 +200,16 @@ async def _send_speechace_request(
     )
 
 
-async def _log_speechace_failure(
-    user_api_key_dict: UserAPIKeyAuth,
-    exception: Exception,
-    request_data: dict,
-) -> None:
-    from litellm.proxy.proxy_server import proxy_logging_obj
-
-    await proxy_logging_obj.post_call_failure_hook(
-        user_api_key_dict=user_api_key_dict,
-        original_exception=exception,
-        request_data=request_data,
-    )
-
-
-@router.post(
-    "/v1/speechace/score",
-    tags=["SpeechAce", "pass-through"],
-)
-async def speechace_score(
+async def _build_speechace_logging_context(
     request: Request,
-    user_api_key_dict: UserAPIKeyAuth = Depends(speechace_user_api_key_auth),
-) -> Response:
+    user_api_key_dict: UserAPIKeyAuth,
+    url: httpx.URL,
+    headers: Dict[str, str],
+    litellm_call_id: str,
+    start_time: datetime,
+) -> tuple[Logging, dict, dict, PassthroughStandardLoggingPayload]:
     from litellm.proxy.proxy_server import proxy_logging_obj
 
-    content_type = request.headers.get("content-type", "")
-    if "multipart/form-data" not in content_type or "boundary=" not in content_type:
-        raise HTTPException(
-            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            detail="SpeechAce scoring requires multipart/form-data with a boundary",
-        )
-
-    environment = _get_required_speechace_environment()
-    headers = {"content-type": content_type}
-    accept = request.headers.get("accept")
-    if accept:
-        headers["accept"] = accept
-    content_length = request.headers.get("content-length")
-    if content_length:
-        headers["content-length"] = content_length
-
-    url = _build_speechace_url(
-        target_url=environment["target_url"],
-        request_query_params=dict(request.query_params),
-        default_query_params={
-            "key": environment["api_key"],
-            "user_id": environment["user_id"],
-        },
-    )
-
-    litellm_call_id = str(uuid.uuid4())
-    start_time = datetime.now()
     logging_obj = Logging(
         model="speechace/score",
         messages=[{"role": "user", "content": ""}],
@@ -295,6 +260,117 @@ async def speechace_score(
             "headers": headers,
         },
     )
+    return logging_obj, request_data, kwargs, passthrough_logging_payload
+
+
+async def _log_speechace_success(
+    request: Request,
+    user_api_key_dict: UserAPIKeyAuth,
+    response: httpx.Response,
+    response_body: Optional[dict],
+    url: httpx.URL,
+    headers: Dict[str, str],
+    litellm_call_id: str,
+    start_time: datetime,
+    end_time: datetime,
+) -> None:
+    (
+        logging_obj,
+        request_data,
+        kwargs,
+        passthrough_logging_payload,
+    ) = await _build_speechace_logging_context(
+        request=request,
+        user_api_key_dict=user_api_key_dict,
+        url=url,
+        headers=headers,
+        litellm_call_id=litellm_call_id,
+        start_time=start_time,
+    )
+    passthrough_logging_payload["response_body"] = response_body
+    await pass_through_endpoint_logging.pass_through_async_success_handler(
+        httpx_response=response,
+        response_body=response_body,
+        url_route=str(url),
+        result="",
+        start_time=start_time,
+        end_time=end_time,
+        logging_obj=logging_obj,
+        cache_hit=False,
+        request_body=request_data,
+        custom_llm_provider="speechace",
+        **kwargs,
+    )
+
+
+async def _log_speechace_failure(
+    request: Request,
+    user_api_key_dict: UserAPIKeyAuth,
+    exception: Exception,
+    url: httpx.URL,
+    headers: Dict[str, str],
+    litellm_call_id: str,
+    start_time: datetime,
+) -> None:
+    from litellm.proxy.proxy_server import proxy_logging_obj
+
+    (
+        logging_obj,
+        request_data,
+        kwargs,
+        _,
+    ) = await _build_speechace_logging_context(
+        request=request,
+        user_api_key_dict=user_api_key_dict,
+        url=url,
+        headers=headers,
+        litellm_call_id=litellm_call_id,
+        start_time=start_time,
+    )
+    await proxy_logging_obj.post_call_failure_hook(
+        user_api_key_dict=user_api_key_dict,
+        original_exception=exception,
+        request_data={**request_data, **kwargs},
+    )
+
+
+@router.post(
+    "/v1/speechace/score",
+    tags=["SpeechAce", "pass-through"],
+)
+async def speechace_score(
+    request: Request,
+    user_api_key_dict: UserAPIKeyAuth = Depends(speechace_user_api_key_auth),
+) -> Response:
+    # Latency-first hot path: authenticate (dependency) → upstream → respond.
+    # LiteLLM logging/metrics are deferred off the critical path.
+    content_type = request.headers.get("content-type", "")
+    if "multipart/form-data" not in content_type or "boundary=" not in content_type:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="SpeechAce scoring requires multipart/form-data with a boundary",
+        )
+
+    environment = _get_required_speechace_environment()
+    headers = {"content-type": content_type}
+    accept = request.headers.get("accept")
+    if accept:
+        headers["accept"] = accept
+    content_length = request.headers.get("content-length")
+    if content_length:
+        headers["content-length"] = content_length
+
+    url = _build_speechace_url(
+        target_url=environment["target_url"],
+        request_query_params=dict(request.query_params),
+        default_query_params={
+            "key": environment["api_key"],
+            "user_id": environment["user_id"],
+        },
+    )
+
+    litellm_call_id = str(uuid.uuid4())
+    start_time = datetime.now()
 
     try:
         response = await _send_speechace_request(
@@ -305,9 +381,13 @@ async def speechace_score(
         response.raise_for_status()
     except httpx.HTTPStatusError as exception:
         await _log_speechace_failure(
+            request=request,
             user_api_key_dict=user_api_key_dict,
             exception=exception,
-            request_data={**request_data, **kwargs},
+            url=url,
+            headers=headers,
+            litellm_call_id=litellm_call_id,
+            start_time=start_time,
         )
         raise HTTPException(
             status_code=exception.response.status_code,
@@ -315,28 +395,30 @@ async def speechace_score(
         ) from exception
     except Exception as exception:
         await _log_speechace_failure(
+            request=request,
             user_api_key_dict=user_api_key_dict,
             exception=exception,
-            request_data={**request_data, **kwargs},
+            url=url,
+            headers=headers,
+            litellm_call_id=litellm_call_id,
+            start_time=start_time,
         )
         raise
 
     content = await response.aread()
+    end_time = datetime.now()
     response_body: Optional[dict] = get_response_body(response)
-    passthrough_logging_payload["response_body"] = response_body
     asyncio.create_task(
-        pass_through_endpoint_logging.pass_through_async_success_handler(
-            httpx_response=response,
+        _log_speechace_success(
+            request=request,
+            user_api_key_dict=user_api_key_dict,
+            response=response,
             response_body=response_body,
-            url_route=str(url),
-            result="",
+            url=url,
+            headers=headers,
+            litellm_call_id=litellm_call_id,
             start_time=start_time,
-            end_time=datetime.now(),
-            logging_obj=logging_obj,
-            cache_hit=False,
-            request_body=request_data,
-            custom_llm_provider="speechace",
-            **kwargs,
+            end_time=end_time,
         )
     )
 

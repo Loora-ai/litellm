@@ -7,6 +7,7 @@ from fastapi import FastAPI, HTTPException, Request
 from starlette.datastructures import Headers
 
 from litellm.proxy._types import LiteLLMRoutes, UserAPIKeyAuth
+from litellm.proxy.pass_through_endpoints import speechace_connector
 from litellm.proxy.pass_through_endpoints.speechace_connector import (
     _build_speechace_url,
     _get_required_speechace_environment,
@@ -18,6 +19,7 @@ from litellm.proxy.pass_through_endpoints.speechace_connector import (
 
 
 def _set_speechace_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(speechace_connector, "_cached_speechace_environment", None)
     monkeypatch.setenv(
         "SPEECHACE_TARGET_URL",
         "https://api4.speechace.com/api/scoring/text/v9/json",
@@ -67,9 +69,7 @@ async def test_speechace_score_streams_multipart_without_auth_reading_body(
         request=httpx.Request("POST", "https://speechace.example/score"),
     )
     auth_read_body = False
-
-    async def return_pre_call_data(**kwargs):
-        return kwargs["data"]
+    send_order: list[str] = []
 
     async def authenticate_without_reading_body(request: Request) -> UserAPIKeyAuth:
         nonlocal auth_read_body
@@ -78,6 +78,7 @@ async def test_speechace_score_streams_multipart_without_auth_reading_body(
         return UserAPIKeyAuth()
 
     async def capture_send_request(*, request: Request, url, headers):
+        send_order.append("send")
         body = b""
         async for chunk in request.stream():
             body += chunk
@@ -92,6 +93,13 @@ async def test_speechace_score_streams_multipart_without_auth_reading_body(
         }
         return upstream_response
 
+    async def capture_success_log(**kwargs):
+        send_order.append("log")
+        assert kwargs["custom_llm_provider"] == "speechace"
+        assert kwargs["litellm_params"]["metadata"]["spend_logs_metadata"] == {
+            "service": "application-backend"
+        }
+
     app = FastAPI()
     app.include_router(router)
     app.dependency_overrides[speechace_user_api_key_auth] = (
@@ -101,7 +109,7 @@ async def test_speechace_score_streams_multipart_without_auth_reading_body(
     with (
         patch(
             "litellm.proxy.proxy_server.proxy_logging_obj.pre_call_hook",
-            new=AsyncMock(side_effect=return_pre_call_data),
+            new=AsyncMock(side_effect=lambda **kwargs: kwargs["data"]),
         ),
         patch(
             "litellm.proxy.pass_through_endpoints.speechace_connector._send_speechace_request",
@@ -109,7 +117,7 @@ async def test_speechace_score_streams_multipart_without_auth_reading_body(
         ) as mock_send_request,
         patch(
             "litellm.proxy.pass_through_endpoints.speechace_connector.pass_through_endpoint_logging.pass_through_async_success_handler",
-            new=AsyncMock(),
+            new=AsyncMock(side_effect=capture_success_log),
         ) as mock_success_handler,
     ):
         async with httpx.AsyncClient(
@@ -137,12 +145,8 @@ async def test_speechace_score_streams_multipart_without_auth_reading_body(
     assert response.content == b'{"status":"success"}'
     assert auth_read_body is False
     assert mock_send_request.await_count == 1
-    assert mock_success_handler.await_args is not None
-    success_kwargs = mock_success_handler.await_args.kwargs
-    assert success_kwargs["custom_llm_provider"] == "speechace"
-    assert success_kwargs["litellm_params"]["metadata"]["spend_logs_metadata"] == {
-        "service": "application-backend"
-    }
+    assert mock_success_handler.await_count == 1
+    assert send_order == ["send", "log"]
 
 
 @pytest.mark.asyncio
@@ -204,6 +208,7 @@ async def test_speechace_score_rejects_invalid_content_type(
 def test_speechace_environment_requires_all_values(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(speechace_connector, "_cached_speechace_environment", None)
     monkeypatch.delenv("SPEECHACE_TARGET_URL", raising=False)
     monkeypatch.delenv("SPEECHACE_API_KEY", raising=False)
     monkeypatch.delenv("SPEECHACE_USER_ID", raising=False)
@@ -235,14 +240,7 @@ async def test_speechace_score_propagates_upstream_errors(
         request=httpx.Request("POST", "https://speechace.example/score"),
     )
 
-    async def return_pre_call_data(**kwargs):
-        return kwargs["data"]
-
     with (
-        patch(
-            "litellm.proxy.proxy_server.proxy_logging_obj.pre_call_hook",
-            new=AsyncMock(side_effect=return_pre_call_data),
-        ),
         patch(
             "litellm.proxy.pass_through_endpoints.speechace_connector._send_speechace_request",
             new=AsyncMock(return_value=upstream_response),
