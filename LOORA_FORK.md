@@ -62,7 +62,11 @@ TTS/`speech()` and SpeechAce pass `custom_llm_provider` as a kwarg. Deployment m
 
 Defined in `litellm/types/integrations/prometheus.py` (`PrometheusMetricLabels`). Fallback emit path fills values in `litellm/integrations/prometheus.py` (`log_success_fallback_event` / `log_failure_fallback_event`).
 
-v1.98.0 already has `api_provider` on most request metrics. We add **`api_base`** where it was missing, plus `team`/`team_alias` on remaining requests/tokens, plus `api_provider`+`api_base` on fallback metrics.
+v1.98.0 already has `api_provider` on most request metrics, and **already has `api_base` on deployment metrics** (`litellm_deployment_state`, `litellm_deployment_total_requests`, `litellm_deployment_success_responses`, `litellm_deployment_failure_responses`, `litellm_deployment_cooled_down`, `litellm_deployment_latency_per_output_token`, TPM/RPM limits).
+
+We add **`api_base`** only where it was missing (request/spend/token/latency/proxy/cache/batch metrics), plus `team`/`team_alias` on remaining requests/tokens, plus `api_provider`+`api_base` on fallback metrics.
+
+**Do not append a label a metric already has.** prometheus-client 0.20 accepts duplicate `labelnames` at Gauge construction, then `.labels(**kwargs)` raises `ValueError: Incorrect label names` (kwargs are unique keys). That broke `set_llm_deployment_success_metrics` in production.
 
 Adding labels creates new Prometheus series. Old series without `api_base` stop updating. Grafana that filters by `api_base` needs this.
 
@@ -81,7 +85,7 @@ Adding labels creates new Prometheus series. Old series without `api_base` stop 
    - tests/test_litellm/proxy/pass_through_endpoints/test_speechace_connector.py
    - tests/test_litellm/llms/elevenlabs/test_elevenlabs_text_to_speech_transformation.py
    - the prometheus provider-sync tests
-5. Diff PrometheusMetricLabels vs the new tag. Only add labels we still need; do not duplicate api_provider if upstream already has it.
+5. Diff PrometheusMetricLabels vs the new tag. Only add labels we still need; do not duplicate `api_base` / `api_provider` if upstream already has them. Run `test_prometheus_metric_label_lists_have_no_duplicates` and `test_set_deployment_healthy_accepts_standard_labels`.
 ```
 
 ## Deploy config (outside this repo)

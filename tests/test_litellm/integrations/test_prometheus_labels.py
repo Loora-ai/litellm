@@ -93,6 +93,44 @@ def test_model_id_in_extended_metric_set():
         print(f"✅ {metric_name} contains model_id label")
 
 
+def test_prometheus_metric_label_lists_have_no_duplicates():
+    """
+    prometheus_client 0.20 stores duplicate labelnames and then raises
+    ValueError('Incorrect label names') on .labels(**kwargs) because kwargs
+    collapse to unique keys. Never append a label that the metric already has.
+    """
+    for name, value in vars(PrometheusMetricLabels).items():
+        if name.startswith("_") or not isinstance(value, list):
+            continue
+        seen: list[str] = []
+        duplicates: list[str] = []
+        for label in value:
+            if label in seen and label not in duplicates:
+                duplicates.append(label)
+            seen.append(label)
+        assert not duplicates, f"{name} has duplicate labels: {duplicates}"
+
+
+def test_set_deployment_healthy_accepts_standard_labels():
+    """Regression for duplicate api_base on litellm_deployment_state."""
+    from litellm.integrations.prometheus import PrometheusLogger
+
+    _clear_prometheus_registry()
+    try:
+        logger = PrometheusLogger()
+        logger.set_deployment_healthy(
+            litellm_model_name="gpt-5.4-2026-03-05",
+            model_id="eae2db9b18b504d1193bd49dab5b9c0e479a8c43e9738df0df4efcb20a93f779",
+            api_base="https://bedrock-mantle.us-east-2.api.aws/openai/v1",
+            api_provider="bedrock",
+        )
+        samples = _collected_samples("litellm_deployment_state")
+        assert samples, "expected litellm_deployment_state to be emitted"
+        assert samples[0].value == 0
+    finally:
+        _clear_prometheus_registry()
+
+
 def test_api_provider_in_spend_and_requests_metrics():
     """
     Test that api_provider label is present in spend and requests metrics

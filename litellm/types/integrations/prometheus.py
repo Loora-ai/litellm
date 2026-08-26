@@ -388,7 +388,6 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.MODEL_ID.value,
         UserAPIKeyLabelNames.API_BASE.value,
         UserAPIKeyLabelNames.API_PROVIDER.value,
-        UserAPIKeyLabelNames.API_BASE.value,
         UserAPIKeyLabelNames.API_KEY_HASH.value,
         UserAPIKeyLabelNames.API_KEY_ALIAS.value,
         UserAPIKeyLabelNames.TEAM.value,
@@ -538,7 +537,6 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.MODEL_ID.value,
         UserAPIKeyLabelNames.API_BASE.value,
         UserAPIKeyLabelNames.API_PROVIDER.value,
-        UserAPIKeyLabelNames.API_BASE.value,
     ]
 
     litellm_deployment_tpm_limit = [
@@ -546,7 +544,6 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.MODEL_ID.value,
         UserAPIKeyLabelNames.API_BASE.value,
         UserAPIKeyLabelNames.API_PROVIDER.value,
-        UserAPIKeyLabelNames.API_BASE.value,
     ]
 
     litellm_deployment_rpm_limit = litellm_deployment_tpm_limit
@@ -556,7 +553,6 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.MODEL_ID.value,
         UserAPIKeyLabelNames.API_BASE.value,
         UserAPIKeyLabelNames.API_PROVIDER.value,
-        UserAPIKeyLabelNames.API_BASE.value,
         UserAPIKeyLabelNames.EXCEPTION_STATUS.value,
     ]
 
@@ -651,7 +647,6 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.MODEL_ID.value,
         UserAPIKeyLabelNames.API_BASE.value,
         UserAPIKeyLabelNames.API_PROVIDER.value,
-        UserAPIKeyLabelNames.API_BASE.value,
         UserAPIKeyLabelNames.EXCEPTION_STATUS.value,
         UserAPIKeyLabelNames.EXCEPTION_CLASS.value,
         UserAPIKeyLabelNames.API_KEY_HASH.value,
@@ -668,7 +663,6 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.MODEL_ID.value,
         UserAPIKeyLabelNames.API_BASE.value,
         UserAPIKeyLabelNames.API_PROVIDER.value,
-        UserAPIKeyLabelNames.API_BASE.value,
         UserAPIKeyLabelNames.API_KEY_HASH.value,
         UserAPIKeyLabelNames.API_KEY_ALIAS.value,
         UserAPIKeyLabelNames.TEAM.value,
