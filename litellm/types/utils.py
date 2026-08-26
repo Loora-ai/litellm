@@ -3462,6 +3462,7 @@ all_litellm_params = (
         "bos_token",
         "eos_token",
         "request_timeout",
+        "client_side_timeout",
         "complete_response",
         "self",
         "client",
