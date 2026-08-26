@@ -63,6 +63,7 @@ class ElevenLabsTextToSpeechConfig(BaseTextToSpeechConfig):
 
     ELEVENLABS_QUERY_PARAMS_KEY = "__elevenlabs_query_params__"
     ELEVENLABS_VOICE_ID_KEY = "__elevenlabs_voice_id__"
+    ELEVENLABS_WITH_TIMESTAMPS_KEY = "__elevenlabs_with_timestamps__"
 
     def get_supported_openai_params(self, model: str) -> list:
         """
@@ -136,29 +137,44 @@ class ElevenLabsTextToSpeechConfig(BaseTextToSpeechConfig):
             mapped_format: Final = self.FORMAT_MAPPINGS.get(response_format, response_format)
             query_params["output_format"] = mapped_format
 
-        # ElevenLabs does not support OpenAI speed directly.
-        # Drop it to avoid sending unsupported keys unless caller already provided voice_settings.
+        # Merge voice_settings from params, kwargs, and extra_body.
+        voice_settings: dict[str, Any] = {}
+        if isinstance(params.get("voice_settings"), dict):
+            voice_settings.update(params.pop("voice_settings"))
+        if isinstance(passthrough_kwargs.get("voice_settings"), dict):
+            voice_settings.update(passthrough_kwargs.pop("voice_settings"))
+        extra_body = passthrough_kwargs.get("extra_body", {})
+        if isinstance(extra_body, dict) and isinstance(extra_body.get("voice_settings"), dict):
+            voice_settings.update(extra_body.pop("voice_settings"))
+
         speed: Final = params.pop("speed", None)
         if speed is not None:
-            speed_value: float | None
             try:
-                speed_value = float(speed)
+                voice_settings["speed"] = float(speed)
             except (TypeError, ValueError):
-                speed_value = None
-            if speed_value is not None:
-                if isinstance(params.get("voice_settings"), dict):
-                    params["voice_settings"]["speed"] = speed_value
-                else:
-                    params["voice_settings"] = {"speed": speed_value}
+                pass
+
+        if voice_settings:
+            params["voice_settings"] = voice_settings
 
         # Instructions parameter is OpenAI-specific; omit to prevent API errors.
         params.pop("instructions", None)
+
+        with_timestamps = params.pop("with_timestamps", None)
+        if with_timestamps is None:
+            extra_body = passthrough_kwargs.get("extra_body", {})
+            if isinstance(extra_body, dict):
+                with_timestamps = extra_body.pop("with_timestamps", False)
+            else:
+                with_timestamps = False
+
         self._add_elevenlabs_specific_params(
             mapped_voice=mapped_voice,
             query_params=query_params,
             mapped_params=mapped_params,
             kwargs=passthrough_kwargs,
             remaining_params=params,
+            with_timestamps=with_timestamps,
         )
 
         return mapped_voice, mapped_params
@@ -233,6 +249,7 @@ class ElevenLabsTextToSpeechConfig(BaseTextToSpeechConfig):
         mapped_params: dict[str, Any],
         kwargs: dict[str, Any] | None,
         remaining_params: dict[str, Any],
+        with_timestamps: bool = False,
     ) -> None:
         if kwargs is None:
             kwargs = {}
@@ -244,12 +261,15 @@ class ElevenLabsTextToSpeechConfig(BaseTextToSpeechConfig):
         reserved_kwarg_keys: Final = set(all_litellm_params) | {
             self.ELEVENLABS_QUERY_PARAMS_KEY,
             self.ELEVENLABS_VOICE_ID_KEY,
+            self.ELEVENLABS_WITH_TIMESTAMPS_KEY,
             "voice",
             "model",
             "response_format",
             "output_format",
             "extra_body",
             "user",
+            "with_timestamps",
+            "voice_settings",
         }
 
         extra_body_from_kwargs: Final = kwargs.pop("extra_body", None)
@@ -274,18 +294,23 @@ class ElevenLabsTextToSpeechConfig(BaseTextToSpeechConfig):
             kwargs.pop(self.ELEVENLABS_QUERY_PARAMS_KEY, None)
 
         kwargs[self.ELEVENLABS_VOICE_ID_KEY] = mapped_voice
+        kwargs[self.ELEVENLABS_WITH_TIMESTAMPS_KEY] = with_timestamps
 
     def transform_text_to_speech_response(
         self,
         model: str,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-    ) -> "HttpxBinaryResponseContent":
+    ) -> "HttpxBinaryResponseContent | dict[str, Any]":
         """
-        Wrap ElevenLabs binary audio response.
+        Wrap ElevenLabs response - binary audio, or JSON when with_timestamps is set.
         """
         from litellm.types.llms.openai import HttpxBinaryResponseContent
 
+        content_type = raw_response.headers.get("content-type", "")
+        if "application/json" in content_type:
+            json_response: dict[str, Any] = raw_response.json()
+            return json_response
         return HttpxBinaryResponseContent(raw_response)
 
     def get_complete_url(
@@ -305,7 +330,9 @@ class ElevenLabsTextToSpeechConfig(BaseTextToSpeechConfig):
             raise ValueError("ElevenLabs voice_id is required. Pass `voice` when calling `litellm.speech()`.")
 
         encoded_voice_id: Final = encode_url_path_segment(voice_id, field_name="voice_id")
-        url = f"{base_url}{self.TTS_ENDPOINT_PATH}/{encoded_voice_id}"
+        with_timestamps = litellm_params.get(self.ELEVENLABS_WITH_TIMESTAMPS_KEY, False)
+        endpoint_suffix = "/with-timestamps" if with_timestamps else ""
+        url = f"{base_url}{self.TTS_ENDPOINT_PATH}/{encoded_voice_id}{endpoint_suffix}"
 
         query_params: Final = litellm_params.get(self.ELEVENLABS_QUERY_PARAMS_KEY, {})
         if query_params:

@@ -50,6 +50,25 @@ def test_get_masked_api_base(logging_obj):
     assert type(masked_api_base) == str
 
 
+def test_update_environment_variables_syncs_custom_llm_provider_into_litellm_params(
+    logging_obj,
+):
+    """Prometheus deployment_state reads api_provider from litellm_params."""
+    logging_obj.update_environment_variables(
+        model="gpt-4.1-mini-2025-04-14-dev",
+        user=None,
+        optional_params={},
+        litellm_params={"metadata": {"model_info": {"id": "model-123"}}},
+        custom_llm_provider="azure",
+    )
+
+    assert logging_obj.litellm_params["custom_llm_provider"] == "azure"
+    assert logging_obj.model_call_details["litellm_params"]["custom_llm_provider"] == (
+        "azure"
+    )
+    assert logging_obj.model_call_details["custom_llm_provider"] == "azure"
+
+
 def test_post_call_serializes_dict_with_datetime(logging_obj):
     import datetime
 

@@ -128,9 +128,11 @@ class BaseTextToSpeechConfig(ABC):
         model: str,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-    ) -> "HttpxBinaryResponseContent":
+    ) -> "HttpxBinaryResponseContent | dict[str, Any]":
         """
-        Transform provider response to standard format
+        Transform provider response to standard format.
+
+        Returns binary audio, or a dict for JSON TTS (e.g. ElevenLabs with_timestamps).
         """
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict) -> BaseLLMException:

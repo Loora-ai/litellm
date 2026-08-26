@@ -11326,7 +11326,8 @@ class BaseLLMHTTPHandler:
         _is_async: bool = False,
     ) -> Union[
         "HttpxBinaryResponseContent",
-        Coroutine[object, object, "HttpxBinaryResponseContent"],
+        dict,
+        Coroutine[object, object, Union["HttpxBinaryResponseContent", dict]],
     ]:
         """
         Handles text-to-speech requests.
@@ -11438,7 +11439,7 @@ class BaseLLMHTTPHandler:
         timeout: float | httpx.Timeout,
         extra_headers: dict[str, object] | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
-    ) -> "HttpxBinaryResponseContent":
+    ) -> Union["HttpxBinaryResponseContent", dict]:
         """
         Async version of the text-to-speech handler.
         Uses async HTTP client to make requests.

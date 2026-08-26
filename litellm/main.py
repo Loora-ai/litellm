@@ -7682,6 +7682,7 @@ def transcription(
             "preset_cache_key": None,
             "stream_response": {},
             **kwargs,
+            "custom_llm_provider": custom_llm_provider,
         },
         custom_llm_provider=custom_llm_provider,
     )
@@ -7920,7 +7921,7 @@ def speech(
     custom_llm_provider: str | None = None,
     aspeech: bool | None = None,
     **kwargs,
-) -> HttpxBinaryResponseContent | Coroutine[object, object, HttpxBinaryResponseContent]:
+) -> HttpxBinaryResponseContent | dict | Coroutine[object, object, HttpxBinaryResponseContent | dict]:
     user: Final = kwargs.get("user", None)
     litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
     proxy_server_request: Final = kwargs.get("proxy_server_request", None)
@@ -7976,10 +7977,12 @@ def speech(
             "preset_cache_key": None,
             "stream_response": {},
             **kwargs,
+            # Required for Prometheus deployment_* metrics (api_provider label).
+            "custom_llm_provider": custom_llm_provider,
         },
         custom_llm_provider=custom_llm_provider,
     )
-    response: HttpxBinaryResponseContent | Coroutine[object, object, HttpxBinaryResponseContent] | None = None
+    response: HttpxBinaryResponseContent | dict | Coroutine[object, object, HttpxBinaryResponseContent | dict] | None = None
     if custom_llm_provider == "openai" or custom_llm_provider in litellm.openai_compatible_providers:
         if voice is None or not (isinstance(voice, str)):
             raise litellm.BadRequestError(
@@ -8133,6 +8136,11 @@ def speech(
         query_params: Final = kwargs.pop(ElevenLabsTextToSpeechConfig.ELEVENLABS_QUERY_PARAMS_KEY, None)
         if isinstance(query_params, dict):
             litellm_params_dict[ElevenLabsTextToSpeechConfig.ELEVENLABS_QUERY_PARAMS_KEY] = query_params
+
+        with_timestamps = kwargs.pop(ElevenLabsTextToSpeechConfig.ELEVENLABS_WITH_TIMESTAMPS_KEY, None)
+        if with_timestamps is None:
+            with_timestamps = optional_params.get("with_timestamps", False)
+        litellm_params_dict[ElevenLabsTextToSpeechConfig.ELEVENLABS_WITH_TIMESTAMPS_KEY] = with_timestamps
 
         litellm_params_dict[ElevenLabsTextToSpeechConfig.ELEVENLABS_VOICE_ID_KEY] = voice_id
 
