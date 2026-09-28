@@ -1564,3 +1564,75 @@ class TestScanOnlyToolResults:
         assert data["messages"][3]["content"] == "page says [BLOCKED] here"
         assert data["messages"][3]["tool_call_id"] == "call_1"
         assert data["messages"][4]["content"] == "and then?"
+
+
+class TestOpenAIChatCompletionsHandlerGuardedText:
+    @pytest.mark.asyncio
+    async def test_explicit_guarded_text_excludes_prompt_and_context(self):
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockGuardrail()
+        data = {
+            "messages": [
+                {"role": "system", "content": "Student: I want hurt myself now."},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Loora: How are you?"},
+                        {"type": "text", "text": "Student: Doing great."},
+                        {
+                            "type": "guarded_text",
+                            "text": "Loora: How are you?\nStudent: Doing great.",
+                        },
+                    ],
+                },
+            ]
+        }
+
+        await handler.process_input_messages(data, guardrail)
+
+        assert guardrail.last_inputs is not None
+        assert guardrail.last_inputs["texts"] == [
+            "Loora: How are you?\nStudent: Doing great."
+        ]
+        assert data["messages"][0]["content"] == "Student: I want hurt myself now."
+        assert data["messages"][1]["content"] == [
+            {"type": "text", "text": "Loora: How are you?"},
+            {"type": "text", "text": "Student: Doing great."},
+            {"type": "guarded_text", "text": "LOORA: HOW ARE YOU?\nSTUDENT: DOING GREAT."},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_request_without_guarded_text_scans_all_text(self):
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockGuardrail()
+        data = {
+            "messages": [
+                {"role": "system", "content": "System prompt"},
+                {"role": "user", "content": [{"type": "text", "text": "Student message"}]},
+            ]
+        }
+
+        await handler.process_input_messages(data, guardrail)
+
+        assert guardrail.last_inputs is not None
+        assert guardrail.last_inputs["texts"] == ["System prompt", "Student message"]
+
+    @pytest.mark.asyncio
+    async def test_out_of_scope_guarded_text_does_not_disable_tool_result_scan(self):
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockGuardrail()
+        guardrail.scan_only_tool_results = True
+        data = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [{"type": "guarded_text", "text": "Student message"}],
+                },
+                {"role": "tool", "tool_call_id": "call_1", "content": "Tool result"},
+            ]
+        }
+
+        await handler.process_input_messages(data, guardrail)
+
+        assert guardrail.last_inputs is not None
+        assert guardrail.last_inputs["texts"] == ["Tool result"]

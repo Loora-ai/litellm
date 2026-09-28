@@ -87,6 +87,22 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         skip_system: Final = effective_skip_system_message_for_guardrail(guardrail_to_apply)
         skip_tool: Final = effective_skip_tool_message_for_guardrail(guardrail_to_apply)
         scan_only_tool_results: Final = effective_scan_only_tool_results_for_guardrail(guardrail_to_apply)
+        guarded_text_only: Final = any(
+            not role_out_of_guardrail_scope(
+                str(message.get("role") or "").lower(),
+                skip_system_message=skip_system,
+                skip_tool_message=skip_tool,
+                scan_only_tool_results=scan_only_tool_results,
+            )
+            and isinstance(content := message.get("content"), list)
+            and any(
+                isinstance(item, dict)
+                and item.get("type") == "guarded_text"
+                and isinstance(item.get("text"), str)
+                for item in content
+            )
+            for message in messages
+        )
 
         texts_to_check: Final[list[str]] = []
         images_to_check: Final[list[str]] = []
@@ -107,6 +123,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 skip_system_message=skip_system,
                 skip_tool_message=skip_tool,
                 scan_only_tool_results=scan_only_tool_results,
+                guarded_text_only=guarded_text_only,
             )
 
         # Step 2: Apply guardrail to all texts and tool calls in batch
@@ -219,6 +236,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         skip_system_message: bool = False,
         skip_tool_message: bool = False,
         scan_only_tool_results: bool = False,
+        guarded_text_only: bool = False,
     ) -> None:
         """
         Extract text content, images, and tool calls from a message.
@@ -235,7 +253,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
         content: Final = message.get("content", None)
         if content is not None:
-            if isinstance(content, str):
+            if isinstance(content, str) and not guarded_text_only:
                 # Simple string content
                 texts_to_check.append(content)
                 text_task_mappings.append((msg_idx, None))
@@ -245,7 +263,9 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 for content_idx, content_item in enumerate(content):
                     # Extract text
                     text_str = content_item.get("text", None)
-                    if text_str is not None:
+                    if text_str is not None and (
+                        not guarded_text_only or content_item.get("type") == "guarded_text"
+                    ):
                         texts_to_check.append(text_str)
                         text_task_mappings.append((msg_idx, int(content_idx)))
 
