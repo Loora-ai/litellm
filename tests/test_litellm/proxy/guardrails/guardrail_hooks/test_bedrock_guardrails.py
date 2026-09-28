@@ -193,6 +193,30 @@ async def test__redact_pii_matches_multiple_assessments():
 
 
 @pytest.mark.asyncio
+async def test_bedrock_guardrail_uses_its_own_api_key():
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="1",
+        api_key="bedrock-bearer",
+    )
+    guardrail._load_credentials = MagicMock(return_value=(MagicMock(), "eu-west-3"))
+    prepared = MagicMock(url="https://bedrock.example/apply", body=b"{}", headers={})
+    guardrail._prepare_request = MagicMock(return_value=prepared)
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"action": "NONE", "outputs": [], "assessments": []}
+    guardrail.async_handler.post = AsyncMock(return_value=mock_response)
+
+    await guardrail.make_bedrock_api_request(
+        source="INPUT",
+        messages=[{"role": "user", "content": "pong"}],
+        request_data={"api_key": "azure-foundry-key"},
+    )
+
+    assert guardrail._prepare_request.call_args.kwargs["api_key"] == "bedrock-bearer"
+
+
+@pytest.mark.asyncio
 async def test_bedrock_guardrail_logging_uses_redacted_response():
     """Debug logs and standard_logging payloads must not include raw match values."""
 

@@ -413,7 +413,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         bedrock_guardrail_response: BedrockGuardrailResponse = (
             BedrockGuardrailResponse()
         )
-        api_key: Optional[str] = None
+        # The request api_key belongs to the LLM provider. Sending it to
+        # ApplyGuardrail makes Bedrock reject the call with 403.
+        api_key = self.optional_params.get("api_key")
         if request_data:
             dynamic_request_body_params = (
                 self.get_guardrail_dynamic_request_body_params(
@@ -427,8 +429,6 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                     if key not in _BEDROCK_DYNAMIC_BODY_DENYLIST
                 }
             )
-            if request_data.get("api_key") is not None:
-                api_key = request_data["api_key"]
 
         prepared_request = self._prepare_request(
             credentials=credentials,
