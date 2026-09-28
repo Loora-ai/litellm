@@ -767,6 +767,42 @@ async def test__redact_pii_matches_comprehensive_coverage():
 
 
 @pytest.mark.asyncio
+async def test_apply_guardrail_uses_guardrail_api_key_not_request_key():
+    """Foundry and other non-Bedrock calls carry the LLM key. ApplyGuardrail must not send it."""
+    guardrail = BedrockGuardrail(
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="1",
+        api_key="bedrock-bearer",
+    )
+    captured: dict = {}
+
+    async def fake_chunking(**kwargs):
+        captured["api_key"] = kwargs.get("api_key")
+        return []
+
+    with (
+        patch.object(
+            guardrail,
+            "convert_to_bedrock_format",
+            return_value={"source": "INPUT", "content": [{"text": {"text": "hello"}}]},
+        ),
+        patch.object(guardrail, "get_guardrail_dynamic_request_body_params", return_value={}),
+        patch.object(guardrail, "_load_credentials", return_value=(MagicMock(), "eu-west-3")),
+        patch.object(guardrail, "_content_uses_contextual_grounding", return_value=False),
+        patch.object(guardrail, "_apply_guardrail_content_with_chunking", side_effect=fake_chunking),
+        patch.object(guardrail, "_merge_bedrock_guardrail_responses", return_value={}),
+        patch.object(guardrail, "_log_apply_guardrail_success"),
+    ):
+        await guardrail._make_apply_guardrail_request(
+            source="INPUT",
+            messages=[{"role": "user", "content": "hello"}],
+            request_data={"api_key": "azure-foundry-key"},
+        )
+
+    assert captured["api_key"] == "bedrock-bearer"
+
+
+@pytest.mark.asyncio
 async def test_bedrock_guardrail_respects_custom_runtime_endpoint(monkeypatch):
     """Test that BedrockGuardrail respects aws_bedrock_runtime_endpoint when set"""
 
