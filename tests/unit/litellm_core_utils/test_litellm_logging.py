@@ -334,6 +334,25 @@ def test_get_masked_api_base(logging_obj):
     assert type(masked_api_base) == str
 
 
+def test_update_environment_variables_syncs_custom_llm_provider_into_litellm_params(
+    logging_obj,
+):
+    """Prometheus deployment_state reads api_provider from litellm_params."""
+    logging_obj.update_environment_variables(
+        model="gpt-4.1-mini-2025-04-14-dev",
+        user=None,
+        optional_params={},
+        litellm_params={"metadata": {"model_info": {"id": "model-123"}}},
+        custom_llm_provider="azure",
+    )
+
+    assert logging_obj.litellm_params["custom_llm_provider"] == "azure"
+    assert logging_obj.model_call_details["litellm_params"]["custom_llm_provider"] == (
+        "azure"
+    )
+    assert logging_obj.model_call_details["custom_llm_provider"] == "azure"
+
+
 def test_pre_call_tolerates_missing_api_base(logging_obj):
     """Presigned batch retrieves (Mistral, Bedrock) build their own URL and pass api_base=None
     to pre_call; masking must not raise or the request's pre-call logging is silently lost."""

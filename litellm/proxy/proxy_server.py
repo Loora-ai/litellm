@@ -742,6 +742,9 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     router as pass_through_router,
 )
+from litellm.proxy.pass_through_endpoints.speechace_connector import (
+    router as speechace_connector_router,
+)
 from litellm.proxy.prometheus_cleanup import mark_dead_workers, mark_worker_exit
 from litellm.proxy.public_endpoints import router as public_endpoints_router
 from litellm.proxy.public_endpoints.public_v1 import router as public_v1_router
@@ -12339,6 +12342,13 @@ async def audio_speech(
         if callback_headers:
             custom_headers.update(callback_headers)
 
+        # ElevenLabs with_timestamps returns JSON (audio_base64 + alignment).
+        if isinstance(response, dict):
+            return ORJSONResponse(
+                content=response,
+                headers=custom_headers,
+            )
+
         requested_format: Final = data.get("response_format")
         upstream_content_type: Final = (
             response.response.headers.get("content-type") if isinstance(response, HttpxBinaryResponseContent) else None
@@ -19694,6 +19704,7 @@ app.include_router(openai_passthrough_router)
 app.include_router(batches_router)
 app.include_router(openai_files_router)
 reserve_lazy_slot(app, "llm_passthrough")
+app.include_router(speechace_connector_router)
 app.include_router(pass_through_router)
 app.include_router(health_router)
 app.include_router(key_management_router)

@@ -11670,7 +11670,8 @@ class BaseLLMHTTPHandler:
         _is_async: bool = False,
     ) -> Union[
         "HttpxBinaryResponseContent",
-        Coroutine[object, object, "HttpxBinaryResponseContent"],
+        dict,
+        Coroutine[object, object, Union["HttpxBinaryResponseContent", dict]],
     ]:
         """
         Handles text-to-speech requests.
@@ -11768,7 +11769,8 @@ class BaseLLMHTTPHandler:
             raw_response=response,
             logging_obj=logging_obj,
         )
-        set_provider_response_headers_in_hidden_params(speech_response, response.headers)
+        if not isinstance(speech_response, dict):
+            set_provider_response_headers_in_hidden_params(speech_response, response.headers)
         return speech_response
 
     async def async_text_to_speech_handler(
@@ -11784,7 +11786,7 @@ class BaseLLMHTTPHandler:
         timeout: float | httpx.Timeout,
         extra_headers: dict[str, object] | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
-    ) -> "HttpxBinaryResponseContent":
+    ) -> Union["HttpxBinaryResponseContent", dict]:
         """
         Async version of the text-to-speech handler.
         Uses async HTTP client to make requests.
@@ -11869,7 +11871,8 @@ class BaseLLMHTTPHandler:
             raw_response=response,
             logging_obj=logging_obj,
         )
-        set_provider_response_headers_in_hidden_params(speech_response, response.headers)
+        if not isinstance(speech_response, dict):
+            set_provider_response_headers_in_hidden_params(speech_response, response.headers)
         return speech_response
 
     #########################################################
