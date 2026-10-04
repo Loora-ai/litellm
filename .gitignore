@@ -150,3 +150,7 @@ litellm.log
 
 .coverage-rust
 coverage-rust.xml
+
+# Local ElevenLabs TTS sample audio from manual runs
+test_output_*.mp3
+scripts/test_output_*.mp3

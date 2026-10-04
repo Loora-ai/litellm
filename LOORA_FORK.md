@@ -47,7 +47,6 @@ Upstream TTS is still binary-only. We add `/with-timestamps` (JSON `audio_base64
 - `litellm/proxy/proxy_server.py` — `/v1/audio/speech` returns `ORJSONResponse` when the result is a dict (before `StreamingResponse`)
 - `litellm/types/llms/elevenlabs.py` (new file; copy it forward)
 - Tests: `tests/test_litellm/llms/elevenlabs/test_elevenlabs_text_to_speech_transformation.py`
-- Optional script: `scripts/test_elevenlabs_tts.py`
 
 ### 3. Prometheus
 
@@ -96,7 +95,6 @@ Adding labels creates new Prometheus series. Old series without `api_base` stop 
 3. Copy the Loora-only files from the previous branch (do not replay old commits):
    - litellm/proxy/pass_through_endpoints/speechace_connector.py
    - litellm/types/llms/elevenlabs.py
-   - scripts/test_elevenlabs_tts.py
    - tests/test_litellm/proxy/pass_through_endpoints/test_speechace_connector.py
    - tests/test_litellm/llms/elevenlabs/test_elevenlabs_text_to_speech_transformation.py
    - tests/test_litellm/integrations/test_prometheus_tts_api_provider.py
