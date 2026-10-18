@@ -403,6 +403,7 @@ if TYPE_CHECKING:
     from litellm.llms.base_llm.text_to_speech.transformation import (
         BaseTextToSpeechConfig,
     )
+    from litellm.llms.base_llm.voices.transformation import BaseVoicesConfig
     from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
     from litellm.llms.base_llm.vector_store_files.transformation import (
         BaseVectorStoreFilesConfig,
@@ -9849,6 +9850,22 @@ class ProviderConfigManager:
             return E2BSandboxConfig()
         if provider == SandboxProviders.OPENSANDBOX:
             return OpenSandboxSandboxConfig()
+        return None
+
+    @staticmethod
+    def get_provider_voices_config(
+        model: str,
+        provider: LlmProviders,
+    ) -> BaseVoicesConfig | None:
+        """
+        Get list-voices configuration for a given provider.
+        """
+        if litellm.LlmProviders.ELEVENLABS == provider:
+            from litellm.llms.elevenlabs.voices.transformation import (
+                ElevenLabsVoicesConfig,
+            )
+
+            return ElevenLabsVoicesConfig()
         return None
 
     @staticmethod

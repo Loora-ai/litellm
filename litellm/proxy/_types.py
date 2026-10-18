@@ -367,6 +367,9 @@ class LiteLLMRoutes(enum.Enum):
         # audio Speech
         "/audio/speech",
         "/v1/audio/speech",
+        # voices (list)
+        "/voices",
+        "/v1/voices",
         # moderations
         "/moderations",
         "/v1/moderations",

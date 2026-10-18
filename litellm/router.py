@@ -4820,6 +4820,57 @@ class Router:
             self._stamp_retry_skip_deployment_id(e, kwargs)
             raise e
 
+    async def avoices(self, model: str, **kwargs):
+        """
+        List available voices for a provider, routed by model (reuses the deployment's
+        api_base + api_key). Mirrors `aspeech`.
+        """
+        try:
+            kwargs["model"] = model
+            kwargs["original_function"] = self._avoices
+            self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
+            response: Final = await self.async_function_with_fallbacks(**kwargs)
+            return response
+        except Exception as e:
+            asyncio.create_task(
+                send_llm_exception_alert(
+                    litellm_router_instance=self,
+                    request_kwargs=kwargs,
+                    error_traceback_str=traceback.format_exc(),
+                    original_exception=e,
+                )
+            )
+            raise e
+
+    async def _avoices(self, model: str, **kwargs):
+        model_name: Final = model
+        try:
+            verbose_router_logger.debug("Inside _avoices()- model: %s; kwargs: %s", model, kwargs)
+            parent_otel_span: Final = _get_parent_otel_span_from_kwargs(kwargs)
+            deployment: Final = await self.async_get_available_deployment(
+                model=model,
+                messages=[{"role": "user", "content": "prompt"}],
+                specific_deployment=kwargs.pop("specific_deployment", None),
+                request_kwargs=kwargs,
+            )
+
+            self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
+            data: Final = deployment["litellm_params"].copy()
+
+            self.total_calls[model_name] += 1
+            async with self._deployment_slot(deployment=deployment, kwargs=kwargs, parent_otel_span=parent_otel_span):
+                response = await litellm.avoices(**{**data, **kwargs})
+
+            self.success_calls[model_name] += 1
+            verbose_router_logger.info("litellm.avoices(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)
+            return response
+        except Exception as e:
+            verbose_router_logger.info("litellm.avoices(model=%s)\x1b[31m Exception %s\x1b[0m", model_name, e)
+            if model_name is not None:
+                self.fail_calls[model_name] += 1
+            self._stamp_retry_skip_deployment_id(e, kwargs)
+            raise e
+
     async def arerank(self, model: str, **kwargs):
         try:
             kwargs["model"] = model

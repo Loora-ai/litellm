@@ -12389,6 +12389,88 @@ async def audio_speech(
         )
 
 
+@router.get(
+    "/v1/voices",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["voices"],
+)
+@router.get(
+    "/voices",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["voices"],
+)
+async def list_voices(
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    List available voices for a speech-synthesis provider (ElevenLabs).
+
+    Routed by model so the deployment's api_base + api_key are reused (region-aware),
+    exactly like /audio/speech.
+
+    Query params:
+      - model: a voices-capable model name from model_list (e.g. "eleven-turbo-v2-eu" / "-us") [required]
+      - any provider passthrough params (page_size, search, category, voice_type, next_page_token, ...)
+    """
+    litellm_call_id: Final = resolve_litellm_call_id(request.headers.get("x-litellm-call-id"))
+    data: dict = {"litellm_call_id": litellm_call_id}
+    try:
+        query_params: Final = dict(request.query_params)
+        model: Final = query_params.pop("model", None)
+        if not model:
+            raise HTTPException(
+                status_code=400,
+                detail="Query param 'model' is required (e.g. 'eleven-turbo-v2-eu' or 'eleven-turbo-v2-us')",
+            )
+        data = {**data, "model": model, **query_params}
+
+        data = await add_litellm_data_to_request(
+            data=data,
+            request=request,
+            general_settings=general_settings,
+            user_api_key_dict=user_api_key_dict,
+            version=version,
+            proxy_config=proxy_config,
+        )
+
+        llm_call: Final = await route_request(
+            data=data,
+            route_type="avoices",
+            llm_router=llm_router,
+            user_model=user_model,
+        )
+        response: Final = await llm_call
+
+        asyncio.create_task(proxy_logging_obj.update_request_status(litellm_call_id=litellm_call_id, status="success"))
+        return ORJSONResponse(content=response)
+
+    except Exception as e:
+        await proxy_logging_obj.post_call_failure_hook(
+            user_api_key_dict=user_api_key_dict,
+            original_exception=e,
+            request_data=data,
+        )
+        log_llm_api_exception(e, litellm_call_id)
+        if isinstance(e, ProxyException):
+            raise with_litellm_call_id(e, litellm_call_id)
+        if isinstance(e, HTTPException):
+            raise HTTPException(
+                status_code=e.status_code,
+                detail=e.detail,
+                headers=headers_with_litellm_call_id(e.headers, litellm_call_id),
+            )
+        raise ProxyException(
+            message=getattr(e, "message", f"{e}"),
+            type=getattr(e, "type", "None"),
+            param=getattr(e, "param", "None"),
+            headers=litellm_call_id_headers(litellm_call_id),
+            openai_code=getattr(e, "code", None),
+            code=getattr(e, "status_code", 500),
+        )
+
+
 @router.post(
     "/v1/audio/transcriptions",
     dependencies=[Depends(user_api_key_auth)],

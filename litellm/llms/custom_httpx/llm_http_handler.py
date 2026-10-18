@@ -88,6 +88,7 @@ from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfi
 from litellm.llms.base_llm.search.transformation import BaseSearchConfig, SearchResponse
 from litellm.llms.base_llm.skills.transformation import BaseSkillsAPIConfig
 from litellm.llms.base_llm.text_to_speech.transformation import BaseTextToSpeechConfig
+from litellm.llms.base_llm.voices.transformation import BaseVoicesConfig
 from litellm.llms.base_llm.vector_store.transformation import (
     BaseDirectVectorStoreConfig,
     BaseQueryEmbeddingVectorStoreConfig,
@@ -11874,6 +11875,161 @@ class BaseLLMHTTPHandler:
         if not isinstance(speech_response, dict):
             set_provider_response_headers_in_hidden_params(speech_response, response.headers)
         return speech_response
+
+    #####################################################################
+    ################ VOICES (LIST) HANDLER ##############################
+    #####################################################################
+    def get_voices_handler(
+        self,
+        model: str,
+        voices_provider_config: BaseVoicesConfig,
+        voices_optional_params: dict,
+        custom_llm_provider: str,
+        litellm_params: dict,
+        timeout: float | httpx.Timeout,
+        logging_obj: LiteLLMLoggingObj | None = None,
+        extra_headers: dict[str, object] | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
+        _is_async: bool = False,
+    ) -> Union[dict, Coroutine[object, object, dict]]:
+        """
+        Handles provider "list voices" requests (GET).
+        When _is_async=True, returns a coroutine instead of making the call directly.
+        """
+        if _is_async:
+            return self.async_get_voices_handler(
+                model=model,
+                voices_provider_config=voices_provider_config,
+                voices_optional_params=voices_optional_params,
+                custom_llm_provider=custom_llm_provider,
+                litellm_params=litellm_params,
+                logging_obj=logging_obj,
+                extra_headers=extra_headers,
+                timeout=timeout,
+                client=client if isinstance(client, AsyncHTTPHandler) else None,
+            )
+
+        if client is None or not isinstance(client, HTTPHandler):
+            sync_httpx_client = _get_httpx_client(params={"ssl_verify": litellm_params.get("ssl_verify", None)})
+        else:
+            sync_httpx_client = client
+
+        headers = voices_provider_config.validate_environment(
+            api_key=litellm_params.get("api_key"),
+            headers=extra_headers or {},
+            model=model,
+            api_base=litellm_params.get("api_base"),
+        )
+        if extra_headers:
+            headers.update(extra_headers)
+
+        api_base = voices_provider_config.get_complete_url(
+            model=model,
+            api_base=litellm_params.get("api_base"),
+            litellm_params=litellm_params,
+        )
+
+        request_data = voices_provider_config.transform_voices_request(
+            model=model,
+            optional_params=voices_optional_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+        if "headers" in request_data:
+            headers.update(request_data["headers"])
+
+        if logging_obj is not None:
+            logging_obj.pre_call(
+                input="",
+                api_key="",
+                additional_args={"complete_input_dict": request_data, "api_base": api_base, "headers": headers},
+            )
+
+        try:
+            response = sync_httpx_client.get(
+                url=api_base,
+                headers=headers,
+                params=request_data.get("params") or None,
+                timeout=timeout,
+            )
+        except Exception as e:
+            raise self._handle_error(e=e, provider_config=voices_provider_config)
+
+        return voices_provider_config.transform_voices_response(
+            model=model,
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
+
+    async def async_get_voices_handler(
+        self,
+        model: str,
+        voices_provider_config: BaseVoicesConfig,
+        voices_optional_params: dict,
+        custom_llm_provider: str,
+        litellm_params: dict,
+        timeout: float | httpx.Timeout,
+        logging_obj: LiteLLMLoggingObj | None = None,
+        extra_headers: dict[str, object] | None = None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
+    ) -> dict:
+        """
+        Async version of the list-voices handler.
+        """
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=litellm.LlmProviders(custom_llm_provider),
+                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+            )
+        else:
+            async_httpx_client = client
+
+        headers = voices_provider_config.validate_environment(
+            api_key=litellm_params.get("api_key"),
+            headers=extra_headers or {},
+            model=model,
+            api_base=litellm_params.get("api_base"),
+        )
+        if extra_headers:
+            headers.update(extra_headers)
+
+        api_base = voices_provider_config.get_complete_url(
+            model=model,
+            api_base=litellm_params.get("api_base"),
+            litellm_params=litellm_params,
+        )
+
+        request_data = voices_provider_config.transform_voices_request(
+            model=model,
+            optional_params=voices_optional_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+        if "headers" in request_data:
+            headers.update(request_data["headers"])
+
+        if logging_obj is not None:
+            logging_obj.pre_call(
+                input="",
+                api_key="",
+                additional_args={"complete_input_dict": request_data, "api_base": api_base, "headers": headers},
+            )
+
+        try:
+            response = await async_httpx_client.get(
+                url=api_base,
+                headers=headers,
+                params=request_data.get("params") or None,
+                timeout=timeout,
+            )
+        except Exception as e:
+            raise self._handle_error(e=e, provider_config=voices_provider_config)
+
+        return voices_provider_config.transform_voices_response(
+            model=model,
+            raw_response=response,
+            logging_obj=logging_obj,
+        )
 
     #########################################################
     ########## SKILLS API HANDLERS ##########################

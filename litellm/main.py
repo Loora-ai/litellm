@@ -8194,6 +8194,91 @@ async def aspeech(*args, **kwargs) -> HttpxBinaryResponseContent:
         )
 
 
+def voices(
+    model: str = "elevenlabs",
+    custom_llm_provider: str | None = None,
+    api_key: str | None = None,
+    api_base: str | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    client=None,
+    avoices: bool | None = None,
+    **kwargs,
+) -> dict | Coroutine[object, object, dict]:
+    """
+    List available voices for a speech-synthesis provider (e.g. ElevenLabs GET /v2/voices).
+    """
+    dynamic_api_key: str | None = None
+    if custom_llm_provider is None:
+        model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(model=model, api_base=api_base)
+
+    if timeout is None:
+        timeout = litellm.request_timeout
+
+    voices_provider_config = ProviderConfigManager.get_provider_voices_config(
+        model=model,
+        provider=litellm.LlmProviders(custom_llm_provider),
+    )
+    if voices_provider_config is None:
+        raise litellm.BadRequestError(
+            message=f"List voices is not supported for provider '{custom_llm_provider}'",
+            model=model,
+            llm_provider=custom_llm_provider or "",
+        )
+
+    optional_params: dict = dict(kwargs.pop("voices_params", {}) or {})
+    for key in (
+        "page_size",
+        "search",
+        "category",
+        "voice_type",
+        "next_page_token",
+        "sort",
+        "sort_direction",
+        "include_total_count",
+    ):
+        if kwargs.get(key) is not None:
+            optional_params[key] = kwargs.pop(key)
+
+    litellm_params_dict: dict = {}
+    if api_base is not None:
+        litellm_params_dict["api_base"] = api_base
+    if (resolved_api_key := api_key or dynamic_api_key) is not None:
+        if isinstance(resolved_api_key, str) and resolved_api_key.startswith("os.environ/"):
+            from litellm.secret_managers.main import get_secret_str
+
+            resolved_api_key = get_secret_str(resolved_api_key) or resolved_api_key
+        litellm_params_dict["api_key"] = resolved_api_key
+
+    extra_headers = kwargs.get("extra_headers", None)
+
+    return base_llm_http_handler.get_voices_handler(
+        model=model,
+        voices_provider_config=voices_provider_config,
+        voices_optional_params=optional_params,
+        custom_llm_provider=custom_llm_provider,
+        litellm_params=litellm_params_dict,
+        timeout=timeout,
+        logging_obj=None,
+        extra_headers=extra_headers if isinstance(extra_headers, dict) else None,
+        client=client,
+        _is_async=avoices or False,
+    )
+
+
+async def avoices(
+    model: str = "elevenlabs",
+    **kwargs,
+) -> dict:
+    """
+    Async wrapper for `voices`.
+    """
+    kwargs["avoices"] = True
+    result = voices(model=model, **kwargs)
+    if asyncio.iscoroutine(result):
+        return await result
+    return result
+
+
 @client
 def speech(
     model: str,
