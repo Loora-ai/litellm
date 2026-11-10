@@ -992,6 +992,45 @@ def test_per_query_priced_rerank_deployment_completion_cost_is_nonzero():
     assert cost == pytest.approx(3 * 0.001)
 
 
+def test_per_character_priced_tts_deployment_overrides_cost_map_price(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A TTS deployment priced via ``input_cost_per_character`` must resolve cost
+    against its ``router_model_id`` entry, not the shared cost-map price.
+    """
+    from litellm import Router
+
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "elevenlabs/eleven_turbo_v2",
+        {"input_cost_per_character": 4e-05, "litellm_provider": "elevenlabs", "mode": "audio_speech"},
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "eleven-turbo-v2-us",
+                "litellm_params": {
+                    "model": "elevenlabs/eleven_turbo_v2",
+                    "api_key": "sk-fake",
+                    "api_base": "https://api.elevenlabs.io",
+                    "input_cost_per_character": 2.1e-05,
+                },
+                "model_info": {"base_model": "eleven-turbo-v2-us"},
+            },
+        ]
+    )
+    router_model_id: Final = router.model_list[0]["model_info"]["id"]
+
+    cost: Final = completion_cost(
+        model="elevenlabs/eleven_turbo_v2",
+        prompt="Hello there, how are you doing today?",
+        call_type="aspeech",
+        custom_llm_provider="elevenlabs",
+        custom_pricing=True,
+        router_model_id=router_model_id,
+    )
+
+    assert cost == pytest.approx(31 * 2.1e-05)
+
+
 def test_azure_realtime_cost_calculator(_local_model_cost_map):
 
     cost = handle_realtime_stream_cost_calculation(
