@@ -96,26 +96,24 @@ def bedrock_guardrail_cost(usage_units: Mapping[str, int], aws_region_name: str 
     return guardrail_cost_total(bedrock_guardrail_cost_by_unit(usage_units, aws_region_name))
 
 
-class _BedrockInlineGuardrailInvocationMetrics(BaseModel):
-    model_config = ConfigDict(extra="ignore", frozen=True)
-
-    usage: Mapping[str, Annotated[int, Field(ge=0)]] = Field(default_factory=dict)
-
-
-class _BedrockInlineGuardrailAssessment(BaseModel):
-    model_config = ConfigDict(extra="ignore", frozen=True)
-
-    invocationMetrics: _BedrockInlineGuardrailInvocationMetrics | None = None
-
-
 class _BedrockInlineGuardrailTrace(BaseModel):
     """``trace.guardrail`` of a Converse response when ``guardrailConfig`` (with
     ``trace`` on) is passed straight to the model call instead of a proxy guardrail hook."""
 
+    class Assessment(BaseModel):
+        class InvocationMetrics(BaseModel):
+            model_config = ConfigDict(extra="ignore", frozen=True)
+
+            usage: Mapping[str, Annotated[int, Field(ge=0)]] = Field(default_factory=dict)
+
+        model_config = ConfigDict(extra="ignore", frozen=True)
+
+        invocationMetrics: InvocationMetrics | None = None
+
     model_config = ConfigDict(extra="ignore", frozen=True)
 
-    inputAssessment: Mapping[str, _BedrockInlineGuardrailAssessment] = Field(default_factory=dict)
-    outputAssessments: Mapping[str, Sequence[_BedrockInlineGuardrailAssessment]] = Field(default_factory=dict)
+    inputAssessment: Mapping[str, Assessment] = Field(default_factory=dict)
+    outputAssessments: Mapping[str, Sequence[Assessment]] = Field(default_factory=dict)
 
 
 def bedrock_inline_guardrail_usage_units(trace: object) -> Mapping[str, int]:
