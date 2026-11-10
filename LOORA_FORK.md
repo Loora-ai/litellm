@@ -85,8 +85,8 @@ Adding labels creates new Prometheus series. Old series without `api_base` stop 
 Our Haiku deployments pass `guardrailConfig` (with `trace: enabled_full`) straight to the Bedrock call instead of using a proxy guardrail hook. Upstream only prices hook-based guardrails, so the inline guardrail (AWS bills it separately, ~$1.1k/week) was logged at $0.
 
 - `litellm/litellm_core_utils/llm_cost_calc/guardrail_cost.py` — `bedrock_inline_guardrail_usage_units` sums `trace.guardrail.inputAssessment` + every `outputAssessments` entry's `invocationMetrics.usage`; `bedrock_inline_guardrail_cost` prices it with the existing `bedrock/guardrails` entry
-- `litellm/cost_calculator.py` — `completion_cost` adds it as `additional_costs["bedrock_inline_guardrail"]` when `custom_llm_provider == "bedrock"`, so it lands in `response_cost`, SpendLogs `spend`, and Prometheus spend
-- Tests: `tests/unit/litellm_core_utils/llm_cost_calc/test_guardrail_cost.py` (`test_bedrock_inline_guardrail_*`, `test_completion_cost_adds_bedrock_inline_guardrail_cost`)
+- `litellm/cost_calculator.py` → `_store_cost_breakdown_in_logging_obj` → `Logging.set_cost_breakdown` (`litellm_logging.py`), plus the `CostBreakdown.bedrock_inline_guardrail_cost` key (`types/utils.py`) — **report-only**: stored as `cost_breakdown.bedrock_inline_guardrail_cost` (SpendLogs `metadata`), deliberately **not** added to `total_cost`, `response_cost`, SpendLogs `spend`, budgets, or Prometheus spend. True per-call cost = `spend + bedrock_inline_guardrail_cost`
+- Tests: `tests/unit/litellm_core_utils/llm_cost_calc/test_guardrail_cost.py` (`test_bedrock_inline_guardrail_*`, `test_completion_cost_reports_bedrock_inline_guardrail_cost_outside_total`, `test_completion_cost_omits_bedrock_inline_guardrail_cost_without_trace`)
 
 Non-streaming only: on streams the trace rides the last chunk's `provider_specific_fields`. None of our guardrail callers stream today.
 

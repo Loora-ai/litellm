@@ -1745,6 +1745,7 @@ class Logging(LiteLLMLoggingBaseClass):
         data_residency: str | None = None,
         vertex_location: str | None = None,
         billed_token_rates: "BilledTokenRates | None" = None,
+        bedrock_inline_guardrail_cost: float | None = None,
     ) -> None:
         """
         Helper method to store cost breakdown in the logging object.
@@ -1783,6 +1784,8 @@ class Logging(LiteLLMLoggingBaseClass):
             self.cost_breakdown["cache_creation_cost"] = cache_creation_cost
         if reasoning_cost is not None and reasoning_cost > 0:
             self.cost_breakdown["reasoning_cost"] = reasoning_cost
+        if bedrock_inline_guardrail_cost is not None and bedrock_inline_guardrail_cost > 0:
+            self.cost_breakdown["bedrock_inline_guardrail_cost"] = bedrock_inline_guardrail_cost
 
         # Store additional costs if provided (free-form dict for extensibility)
         if additional_costs and isinstance(additional_costs, dict) and len(additional_costs) > 0:

@@ -1168,6 +1168,7 @@ def _store_cost_breakdown_in_logging_obj(
     data_residency: str | None = None,
     vertex_location: str | None = None,
     billed_token_rates: BilledTokenRates | None = None,
+    bedrock_inline_guardrail_cost: float | None = None,
 ) -> None:
     """
     Helper function to store cost breakdown in the logging object.
@@ -1213,6 +1214,7 @@ def _store_cost_breakdown_in_logging_obj(
             data_residency=data_residency,
             vertex_location=vertex_location,
             billed_token_rates=billed_token_rates,
+            bedrock_inline_guardrail_cost=bedrock_inline_guardrail_cost,
         )
 
     except Exception as breakdown_error:
@@ -1805,13 +1807,6 @@ def completion_cost(
                     )
                 else:
                     additional_costs = None
-                if custom_llm_provider == "bedrock":
-                    inline_guardrail_cost: Final = bedrock_inline_guardrail_cost(completion_response, region_name)
-                    if inline_guardrail_cost > 0:
-                        additional_costs = {
-                            **(additional_costs or {}),
-                            "bedrock_inline_guardrail": inline_guardrail_cost,
-                        }
 
                 _final_cost = prompt_tokens_cost_usd_dollar + completion_tokens_cost_usd_dollar
                 cost_for_built_in_tools = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
@@ -1898,6 +1893,11 @@ def completion_cost(
                         data_residency=data_residency,
                         vertex_location=vertex_location,
                         billed_token_rates=_billed_token_rates,
+                        bedrock_inline_guardrail_cost=(
+                            bedrock_inline_guardrail_cost(completion_response, region_name)
+                            if custom_llm_provider == "bedrock"
+                            else None
+                        ),
                     )
 
                 return _final_cost

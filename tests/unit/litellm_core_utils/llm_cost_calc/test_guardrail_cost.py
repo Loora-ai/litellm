@@ -1,9 +1,11 @@
+import datetime
 from types import SimpleNamespace
 from typing import Final
 
 import pytest
 
 import litellm
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import (
     bedrock_guardrail_cost,
     bedrock_guardrail_cost_by_unit,
@@ -306,11 +308,27 @@ def _bedrock_model_response(trace: dict | None) -> ModelResponse:
     return response
 
 
-def test_completion_cost_adds_bedrock_inline_guardrail_cost():
+def _logging_obj() -> Logging:
+    return Logging(
+        model="eu.anthropic.claude-haiku-4-5-20251001-v1:0",
+        messages=[{"role": "user", "content": "Hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.datetime(2026, 11, 10, 12, 0, 0),
+        litellm_call_id="inline-guardrail-cost",
+        function_id="f",
+    )
+
+
+def test_completion_cost_reports_bedrock_inline_guardrail_cost_outside_total():
     model: Final = "bedrock/eu.anthropic.claude-haiku-4-5-20251001-v1:0"
     token_only_cost: Final = litellm.completion_cost(completion_response=_bedrock_model_response(None), model=model)
+    logging_obj: Final = _logging_obj()
+
     with_guardrail_cost: Final = litellm.completion_cost(
-        completion_response=_bedrock_model_response(_CONVERSE_GUARDRAIL_TRACE), model=model
+        completion_response=_bedrock_model_response(_CONVERSE_GUARDRAIL_TRACE),
+        model=model,
+        litellm_logging_obj=logging_obj,
     )
 
     expected_guardrail_cost: Final = sum(
@@ -318,4 +336,18 @@ def test_completion_cost_adds_bedrock_inline_guardrail_cost():
         for counter, units in bedrock_inline_guardrail_usage_units(_CONVERSE_GUARDRAIL_TRACE).items()
     )
     assert expected_guardrail_cost > 0
-    assert with_guardrail_cost == pytest.approx(token_only_cost + expected_guardrail_cost)
+    assert with_guardrail_cost == pytest.approx(token_only_cost)
+    assert logging_obj.cost_breakdown["total_cost"] == pytest.approx(token_only_cost)
+    assert logging_obj.cost_breakdown["bedrock_inline_guardrail_cost"] == pytest.approx(expected_guardrail_cost)
+
+
+def test_completion_cost_omits_bedrock_inline_guardrail_cost_without_trace():
+    logging_obj: Final = _logging_obj()
+
+    litellm.completion_cost(
+        completion_response=_bedrock_model_response(None),
+        model="bedrock/eu.anthropic.claude-haiku-4-5-20251001-v1:0",
+        litellm_logging_obj=logging_obj,
+    )
+
+    assert "bedrock_inline_guardrail_cost" not in logging_obj.cost_breakdown
