@@ -90,6 +90,15 @@ Our Haiku deployments pass `guardrailConfig` (with `trace: enabled_full`) straig
 
 Non-streaming only: on streams the trace rides the last chunk's `provider_specific_fields`. None of our guardrail callers stream today.
 
+### 5. Per-character deployment pricing (ElevenLabs)
+
+Our ElevenLabs deployments set `input_cost_per_character` to the contract rate. Upstream only treats a deployment's `router_model_id` cost-map entry as priced when it has a per-token, per-second, per-query or tiered field, so a per-character-only deployment fell back to the shared `elevenlabs/eleven_turbo_v2` list price ($0.00004, ~1.9× our bill).
+
+- `litellm/cost_calculator.py` — `input_cost_per_character` added to `_NON_TOKEN_RATE_FIELDS`
+- Tests: `test_per_character_priced_tts_deployment_overrides_cost_map_price` in `tests/unit/test_cost_calculator.py`
+
+`_count_characters` strips whitespace, while ElevenLabs bills every character (~1.2 credits per counted character on our traffic). The deploy-config rate is calibrated to the whitespace-stripped count.
+
 ## What we do **not** keep
 
 - Generic pass-through YAML extras (`os.environ/` on `target` / `default_query_params`, YAML `custom_llm_provider`, multipart query-merge fix). SpeechAce does not use them.
