@@ -80,6 +80,16 @@ On `v1.104.0` we still added:
 
 Adding labels creates new Prometheus series. Old series without `api_base` stop updating. Grafana that filters by `api_base` needs this.
 
+### 4. Bedrock inline guardrail cost
+
+Our Haiku deployments pass `guardrailConfig` (with `trace: enabled_full`) straight to the Bedrock call instead of using a proxy guardrail hook. Upstream only prices hook-based guardrails, so the inline guardrail (AWS bills it separately, ~$1.1k/week) was logged at $0.
+
+- `litellm/litellm_core_utils/llm_cost_calc/guardrail_cost.py` — `bedrock_inline_guardrail_usage_units` sums `trace.guardrail.inputAssessment` + every `outputAssessments` entry's `invocationMetrics.usage`; `bedrock_inline_guardrail_cost` prices it with the existing `bedrock/guardrails` entry
+- `litellm/cost_calculator.py` — `completion_cost` adds it as `additional_costs["bedrock_inline_guardrail"]` when `custom_llm_provider == "bedrock"`, so it lands in `response_cost`, SpendLogs `spend`, and Prometheus spend
+- Tests: `tests/unit/litellm_core_utils/llm_cost_calc/test_guardrail_cost.py` (`test_bedrock_inline_guardrail_*`, `test_completion_cost_adds_bedrock_inline_guardrail_cost`)
+
+Non-streaming only: on streams the trace rides the last chunk's `provider_specific_fields`. None of our guardrail callers stream today.
+
 ## What we do **not** keep
 
 - Generic pass-through YAML extras (`os.environ/` on `target` / `default_query_params`, YAML `custom_llm_provider`, multipart query-merge fix). SpeechAce does not use them.
@@ -113,6 +123,7 @@ Adding labels creates new Prometheus series. Old series without `api_base` stop 
      (test_prometheus_metric_label_lists_have_no_duplicates,
       test_set_deployment_healthy_accepts_standard_labels)
    - tests/unit/litellm_core_utils/test_litellm_logging.py::test_update_environment_variables_syncs_custom_llm_provider_into_litellm_params
+   - tests/unit/litellm_core_utils/llm_cost_calc/test_guardrail_cost.py
 ```
 
 `v1.104.0` moved a lot of tests from `tests/test_litellm/` to `tests/unit/`. The Loora tests above still live under `tests/test_litellm/` and pytest collects both.

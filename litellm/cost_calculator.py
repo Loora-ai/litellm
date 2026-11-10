@@ -18,6 +18,7 @@ from litellm.constants import (
     DEFAULT_MAX_LRU_CACHE_SIZE,
     DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND,
 )
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import bedrock_inline_guardrail_cost
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
 )
@@ -1804,6 +1805,13 @@ def completion_cost(
                     )
                 else:
                     additional_costs = None
+                if custom_llm_provider == "bedrock":
+                    inline_guardrail_cost: Final = bedrock_inline_guardrail_cost(completion_response, region_name)
+                    if inline_guardrail_cost > 0:
+                        additional_costs = {
+                            **(additional_costs or {}),
+                            "bedrock_inline_guardrail": inline_guardrail_cost,
+                        }
 
                 _final_cost = prompt_tokens_cost_usd_dollar + completion_tokens_cost_usd_dollar
                 cost_for_built_in_tools = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(

@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+from typing import Final
 
 import pytest
 
@@ -5,11 +7,14 @@ import litellm
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import (
     bedrock_guardrail_cost,
     bedrock_guardrail_cost_by_unit,
+    bedrock_inline_guardrail_cost,
+    bedrock_inline_guardrail_usage_units,
     billed_guardrail_cost_by_unit,
     cost_breakdown_with_guardrail,
     guardrail_cost_total,
     guardrail_information_cost,
 )
+from litellm.types.utils import Choices, Message, ModelResponse, Usage
 
 
 @pytest.fixture
@@ -230,3 +235,87 @@ def test_guardrail_information_cost_skips_malformed_entry_keeps_siblings():
     ]
     assert guardrail_information_cost(entries) == pytest.approx(0.0003)
     assert guardrail_information_cost({"guardrail_cost": 0.5, "guardrail_cost_in_spend": "maybe"}) == 0.0
+
+
+def _converse_guardrail_usage(topic_units: int, content_units: int) -> dict:
+    return {
+        "invocationMetrics": {
+            "guardrailProcessingLatency": 215,
+            "usage": {
+                "topicPolicyUnits": topic_units,
+                "contentPolicyUnits": content_units,
+                "wordPolicyUnits": 0,
+                "sensitiveInformationPolicyUnits": 0,
+                "sensitiveInformationPolicyFreeUnits": 0,
+                "contextualGroundingPolicyUnits": 0,
+            },
+            "guardrailCoverage": {"textCharacters": {"guarded": 62, "total": 62}},
+        }
+    }
+
+
+# Shape captured from a real Converse call with guardrailConfig trace=enabled_full
+_CONVERSE_GUARDRAIL_TRACE: Final = {
+    "guardrail": {
+        "modelOutput": ['{"content":[{"text":"Hello!"}]}'],
+        "inputAssessment": {"kw7zahiis45j": _converse_guardrail_usage(topic_units=1, content_units=2)},
+        "outputAssessments": {
+            "kw7zahiis45j": [
+                _converse_guardrail_usage(topic_units=1, content_units=1),
+                _converse_guardrail_usage(topic_units=3, content_units=0),
+            ]
+        },
+    }
+}
+
+
+def test_bedrock_inline_guardrail_usage_units_sums_input_and_every_output_assessment():
+    units = bedrock_inline_guardrail_usage_units(_CONVERSE_GUARDRAIL_TRACE)
+
+    assert units["topicPolicyUnits"] == 5
+    assert units["contentPolicyUnits"] == 3
+    assert units["wordPolicyUnits"] == 0
+
+
+@pytest.mark.parametrize(
+    "trace",
+    [None, {}, {"guardrail": {}}, {"guardrail": "malformed"}, {"guardrail": {"inputAssessment": {"g": {}}}}],
+)
+def test_bedrock_inline_guardrail_usage_units_empty_without_usage(trace):
+    assert not bedrock_inline_guardrail_usage_units(trace)
+
+
+def test_bedrock_inline_guardrail_cost_prices_trace_on_response(synthetic_cost_map):
+    response = SimpleNamespace(trace=_CONVERSE_GUARDRAIL_TRACE)
+
+    assert bedrock_inline_guardrail_cost(response, aws_region_name="us-east-1") == pytest.approx(8 * 0.00015)
+
+
+def test_bedrock_inline_guardrail_cost_is_zero_without_trace(synthetic_cost_map):
+    assert bedrock_inline_guardrail_cost(SimpleNamespace(), aws_region_name="us-east-1") == 0.0
+
+
+def _bedrock_model_response(trace: dict | None) -> ModelResponse:
+    response = ModelResponse(
+        model="eu.anthropic.claude-haiku-4-5-20251001-v1:0",
+        choices=[Choices(index=0, finish_reason="stop", message=Message(role="assistant", content="Hello!"))],
+        usage=Usage(prompt_tokens=19, completion_tokens=10, total_tokens=29),
+    )
+    if trace is not None:
+        setattr(response, "trace", trace)
+    return response
+
+
+def test_completion_cost_adds_bedrock_inline_guardrail_cost():
+    model: Final = "bedrock/eu.anthropic.claude-haiku-4-5-20251001-v1:0"
+    token_only_cost: Final = litellm.completion_cost(completion_response=_bedrock_model_response(None), model=model)
+    with_guardrail_cost: Final = litellm.completion_cost(
+        completion_response=_bedrock_model_response(_CONVERSE_GUARDRAIL_TRACE), model=model
+    )
+
+    expected_guardrail_cost: Final = sum(
+        units * litellm.model_cost["bedrock/guardrails"]["guardrail_cost_per_unit"][counter]
+        for counter, units in bedrock_inline_guardrail_usage_units(_CONVERSE_GUARDRAIL_TRACE).items()
+    )
+    assert expected_guardrail_cost > 0
+    assert with_guardrail_cost == pytest.approx(token_only_cost + expected_guardrail_cost)
