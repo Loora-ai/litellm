@@ -18,6 +18,7 @@ from litellm.constants import (
     DEFAULT_MAX_LRU_CACHE_SIZE,
     DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND,
 )
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import bedrock_inline_guardrail_cost
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
 )
@@ -1167,6 +1168,7 @@ def _store_cost_breakdown_in_logging_obj(
     data_residency: str | None = None,
     vertex_location: str | None = None,
     billed_token_rates: BilledTokenRates | None = None,
+    bedrock_inline_guardrail_cost: float | None = None,
 ) -> None:
     """
     Helper function to store cost breakdown in the logging object.
@@ -1212,6 +1214,7 @@ def _store_cost_breakdown_in_logging_obj(
             data_residency=data_residency,
             vertex_location=vertex_location,
             billed_token_rates=billed_token_rates,
+            bedrock_inline_guardrail_cost=bedrock_inline_guardrail_cost,
         )
 
     except Exception as breakdown_error:
@@ -1890,6 +1893,11 @@ def completion_cost(
                         data_residency=data_residency,
                         vertex_location=vertex_location,
                         billed_token_rates=_billed_token_rates,
+                        bedrock_inline_guardrail_cost=(
+                            bedrock_inline_guardrail_cost(completion_response, region_name)
+                            if custom_llm_provider == "bedrock"
+                            else None
+                        ),
                     )
 
                 return _final_cost

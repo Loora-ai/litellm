@@ -1,5 +1,6 @@
 import math
-from collections.abc import Mapping
+from collections import Counter
+from collections.abc import Mapping, Sequence
 from typing import Annotated, Final
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
@@ -93,6 +94,53 @@ def guardrail_cost_total(cost_by_unit: Mapping[str, float | None] | None) -> flo
 
 def bedrock_guardrail_cost(usage_units: Mapping[str, int], aws_region_name: str | None) -> float:
     return guardrail_cost_total(bedrock_guardrail_cost_by_unit(usage_units, aws_region_name))
+
+
+class _BedrockInlineGuardrailTrace(BaseModel):
+    """``trace.guardrail`` of a Converse response when ``guardrailConfig`` (with
+    ``trace`` on) is passed straight to the model call instead of a proxy guardrail hook."""
+
+    class Assessment(BaseModel):
+        class InvocationMetrics(BaseModel):
+            model_config = ConfigDict(extra="ignore", frozen=True)
+
+            usage: Mapping[str, Annotated[int, Field(ge=0)]] = Field(default_factory=dict)
+
+        model_config = ConfigDict(extra="ignore", frozen=True)
+
+        invocationMetrics: InvocationMetrics | None = None
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    inputAssessment: Mapping[str, Assessment] = Field(default_factory=dict)
+    outputAssessments: Mapping[str, Sequence[Assessment]] = Field(default_factory=dict)
+
+
+def bedrock_inline_guardrail_usage_units(trace: object) -> Mapping[str, int]:
+    """Usage counters summed over every input and output assessment in a Converse ``trace``;
+    empty when the trace has no guardrail section or is malformed."""
+    if not isinstance(trace, Mapping) or "guardrail" not in trace:
+        return {}
+    try:
+        guardrail_trace: Final = _BedrockInlineGuardrailTrace.model_validate(trace["guardrail"])
+    except ValidationError as e:
+        verbose_logger.warning("Ignoring malformed Bedrock inline guardrail trace for guardrail cost: %s", e)
+        return {}
+    assessments: Final = [
+        *guardrail_trace.inputAssessment.values(),
+        *(assessment for output in guardrail_trace.outputAssessments.values() for assessment in output),
+    ]
+    totals: Final[Counter[str]] = Counter()
+    for assessment in assessments:
+        if assessment.invocationMetrics is not None:
+            totals.update(assessment.invocationMetrics.usage)
+    return totals
+
+
+def bedrock_inline_guardrail_cost(response: object, aws_region_name: str | None) -> float:
+    """USD of the guardrail Bedrock ran inside the model call, which AWS bills separately from tokens."""
+    usage_units: Final = bedrock_inline_guardrail_usage_units(getattr(response, "trace", None))
+    return bedrock_guardrail_cost(usage_units, aws_region_name) if usage_units else 0.0
 
 
 AZURE_PROMPT_SHIELD_TEXT_RECORD_UNIT: Final = "text_records"
