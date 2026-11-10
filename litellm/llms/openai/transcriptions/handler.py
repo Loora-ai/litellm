@@ -69,6 +69,7 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
         atranscription: bool = False,
         provider_config: BaseAudioTranscriptionConfig | None = None,
         shared_session: Optional["ClientSession"] = None,
+        custom_llm_provider: str = "openai",
     ) -> TranscriptionResponse:
         """
         Handle audio transcription request
@@ -97,6 +98,7 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
                 max_retries=max_retries,
                 logging_obj=logging_obj,
                 shared_session=shared_session,
+                custom_llm_provider=custom_llm_provider,
             )
 
         openai_client: Final[OpenAI] = self._get_openai_client(
@@ -137,7 +139,8 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
             additional_args={"complete_input_dict": data},
             original_response=stringified_response,
         )
-        hidden_params: Final = {"model": model, "custom_llm_provider": "openai"}
+        # The cost calculator prices by this provider, so OpenAI-compatible providers (e.g. groq) must not be reported as openai
+        hidden_params: Final = {"model": model, "custom_llm_provider": custom_llm_provider}
         final_response: Final[TranscriptionResponse] = convert_to_model_response_object(
             response_object=stringified_response,
             model_response_object=model_response,
@@ -159,6 +162,7 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
         client=None,
         max_retries=None,
         shared_session: Optional["ClientSession"] = None,
+        custom_llm_provider: str = "openai",
     ):
         try:
             openai_aclient: Final[AsyncOpenAI] = self._get_openai_client(
@@ -202,7 +206,7 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
             )
             # Extract the actual model from data instead of hardcoding "whisper-1"
             actual_model: Final = data.get("model", "whisper-1")
-            hidden_params: Final = {"model": actual_model, "custom_llm_provider": "openai"}
+            hidden_params: Final = {"model": actual_model, "custom_llm_provider": custom_llm_provider}
 
             final_response: Final[TranscriptionResponse] = convert_to_model_response_object(
                 response_object=stringified_response,
